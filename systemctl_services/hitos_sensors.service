@@ -1,0 +1,22 @@
+# sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_sensors.service /etc/systemd/system/hitos_sensors.service
+[Unit]
+Description=HITOS Sensors - GPS + LiDAR + EKF + Temperature
+After=network-online.target hitos_ptp.service hitos_ptp_sync.service
+Wants=network-online.target hitos_ptp.service hitos_ptp_sync.service
+
+[Service]
+Type=simple
+User=arvc
+ExecStart=/bin/bash -c "\
+    source /home/arvc/ros2_ws/install/setup.bash && \
+    source /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/scripts/hitos_setup.sh && \
+    _hitos_export_ip && \
+    stty -F $$HITOS_GPS_PORT 9600 -hupcl clocal 2>/dev/null || true && \
+    ros2 launch hitos_setup sensors.launch.py"
+KillSignal=SIGINT
+TimeoutStopSec=45
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

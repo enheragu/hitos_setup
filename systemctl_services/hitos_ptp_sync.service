@@ -1,0 +1,25 @@
+# sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_ptp_sync.service /etc/systemd/system/hitos_ptp_sync.service
+[Unit]
+Description=HITOS PTP Sync - Sync PHC from CLOCK_REALTIME (eth0)
+After=hitos_ptp.service
+Requires=hitos_ptp.service
+
+[Service]
+Type=simple
+# Wait up to 120 s for NTP to synchronize before stamping the PHC.
+# time-sync.target is unreliable on Ubuntu/RPi5 — poll timedatectl directly.
+ExecStartPre=/bin/bash -c \
+  'for i in $(seq 60); do \
+     timedatectl show -p NTPSynchronized --value 2>/dev/null | grep -q yes && exit 0; \
+     sleep 2; \
+   done; \
+   echo "WARNING: NTP not synced after 120s, setting PHC anyway"; exit 0'
+ExecStartPre=/usr/sbin/phc_ctl eth0 set
+ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c eth0 -m -O 37
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

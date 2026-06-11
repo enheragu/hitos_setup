@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HITOS Manager</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script>
+        (function(){
+            var t = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+            document.documentElement.classList.toggle('dark', t === 'dark');
+        })();
+    </script>
+</head>
+<body>
+<div class="container">
+
+    <header class="header">
+        <div class="logo">
+            <img src="{{ url_for('static', filename='arvc_logo.png') }}" alt="ARVC" class="logo-img">
+            <div class="logo-text">
+                <h1>HITOS Manager</h1>
+                <p class="logo-subtitle">Heterogeneous Integrated Thermal-Optical System</p>
+            </div>
+        </div>
+        <div class="header-info">
+            <div class="header-nav">
+                {% for key, gui in gui_links.items() %}
+                <button class="btn btn-gui" onclick="openGui('{{ key }}')" title="Open {{ gui.name }}">
+                    <span class="icon">📸</span>
+                    <span class="text">{{ gui.name }}</span>
+                </button>
+                {% endfor %}
+            </div>
+            <span class="status-indicator" id="connection-status">
+                <span class="dot"></span>
+                <span class="text">Connecting...</span>
+            </span>
+            <span class="datetime" id="datetime"></span>
+            <button class="btn-shutdown" onclick="showShutdownModal()" title="Shutdown Raspberry Pi">⏻</button>
+        </div>
+    </header>
+
+    <main class="main-masonry" id="main-container">
+
+        <section class="card" data-section="processes" data-order="1">
+            <div class="card-header"><h2><span class="icon">⚙️</span> Processes</h2></div>
+            <div class="card-body" id="processes-container"><div class="loading">Loading...</div></div>
+        </section>
+
+        <section class="card" data-section="sensors" data-order="2">
+            <div class="card-header"><h2><span class="icon">📡</span> Sensors</h2></div>
+            <div class="card-body topics-grid" id="sensors-container"><div class="loading">Loading...</div></div>
+        </section>
+
+        <section class="card" data-section="cameras" data-order="3">
+            <div class="card-header"><h2><span class="icon">📷</span> Cameras</h2></div>
+            <div class="card-body topics-grid" id="cameras-container"><div class="loading">Loading...</div></div>
+        </section>
+
+        <section class="card" data-section="fusion" data-order="4">
+            <div class="card-header"><h2><span class="icon">🔗</span> Fusion</h2></div>
+            <div class="card-body topics-grid" id="fusion-container"><div class="loading">Loading...</div></div>
+        </section>
+
+        <section class="card" data-section="network" data-order="5">
+            <div class="card-header"><h2><span class="icon">🌐</span> Network</h2></div>
+            <div class="card-body" id="network-container"><div class="loading">Loading...</div></div>
+        </section>
+
+        <section class="card" data-section="system" data-order="6">
+            <div class="card-header"><h2><span class="icon">🔧</span> System Setup</h2></div>
+            <div class="card-body" id="system-container"><div class="loading">Loading...</div></div>
+        </section>
+
+    </main>
+
+    <footer class="footer">
+        <p>
+            <a href="https://github.com/enheragu/hitos_setup" target="_blank" rel="noopener">HITOS Manager v1.0</a>
+            —
+            <a href="https://arvc.umh.es/index.php?lang=en" target="_blank" rel="noopener">ARVC</a>
+            /
+            <a href="https://enheragu.github.io/" target="_blank" rel="noopener">EEHA</a>
+        </p>
+    </footer>
+
+<div data-theme-toggle-host></div>
+</div>
+
+<div class="modal-overlay" id="log-modal">
+    <div class="modal-content modal-log">
+        <div class="modal-header">
+            <h3 id="log-modal-title">Logs</h3>
+            <button class="modal-close" onclick="closeLogModal()">&times;</button>
+        </div>
+        <div class="modal-body"><pre id="log-modal-content">Loading...</pre></div>
+        <div class="modal-footer">
+            <button class="btn btn-small" onclick="refreshLogs()">🔄 Refresh</button>
+            <button class="btn btn-small" onclick="closeLogModal()">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="shutdown-modal">
+    <div class="modal-content modal-confirm">
+        <div class="modal-header">
+            <h3>⚠️ Shutdown Raspberry Pi</h3>
+            <button class="modal-close" onclick="closeShutdownModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Are you sure you want to shut down the Raspberry Pi?</p>
+            <p style="color:var(--text-muted);font-size:0.85rem;">All running processes will be stopped and the system will power off.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-small" onclick="closeShutdownModal()">Cancel</button>
+            <button class="btn btn-small btn-confirm-shutdown" onclick="confirmShutdown()">⏻ Shutdown</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="sparkline-modal">
+    <div class="modal-content modal-sparkline">
+        <div class="modal-header">
+            <h3 id="sparkline-modal-title">Frequency History</h3>
+            <button class="modal-close" onclick="closeSparklineModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="sparkline-modal-body" style="padding:var(--spacing-xl)">
+            <div id="sparkline-modal-chart" style="width:100%"></div>
+            <div class="sparkline-modal-meta">
+                <span id="sparkline-modal-range">60 s</span>
+                <span id="sparkline-modal-hz" class="sparkline-modal-hz">N/A</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+
+<script>const GUI_LINKS = {{ gui_links | tojson }};</script>
+<script src="{{ url_for('static', filename='js/ui-core.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

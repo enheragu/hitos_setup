@@ -1,0 +1,20 @@
+ouster/os_driver:
+  ros__parameters:
+    sensor_hostname: '192.168.4.4'
+    timestamp_mode: 'TIME_FROM_PTP_1588'
+    lidar_mode: '1024x10'
+    # 30° window centred on the front of the sensor.
+    # Driver expects two separate params, NOT a list.
+    # If 0° = cable connector (typical): front is at 180° → start=165000, end=195000
+    # If 0° = front (arrow marking):                front is at   0° → start=345000, end=15000
+    azimuth_window_start: 165000
+    azimuth_window_end: 195000
+    lidar_port: 7502
+    imu_port: 7503
+    sensor_frame: os_sensor
+    lidar_frame: os_lidar
+    imu_frame: os_imu
+    point_cloud_frame: os_lidar
+    organized: true
+    destagger: true
+    point_type: original

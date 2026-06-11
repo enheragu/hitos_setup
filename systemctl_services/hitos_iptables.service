@@ -1,0 +1,17 @@
+# sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_iptables.service /etc/systemd/system/hitos_iptables.service
+# sudo systemctl enable hitos_iptables
+[Unit]
+Description=HITOS iptables per-IP traffic counters
+After=network.target
+Before=hitos_web_manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c "\
+    source /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/scripts/hitos_setup.sh && \
+    _hitos_export_ip && \
+    _hitos_setup_iptables"
+
+[Install]
+WantedBy=multi-user.target

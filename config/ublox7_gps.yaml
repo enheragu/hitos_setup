@@ -1,0 +1,22 @@
+# u-blox 7 GPS receiver configuration (USB, persistent symlink via udev)
+# Used for HITOS multiespectral acquisition system (Pi5)
+ublox_gps_node:
+  ros__parameters:
+    debug: 1                  # 0=silent, 1=errors, 2=warnings, 3=info, 4=verbose
+
+    device: /dev/ublox_gps    # persistent symlink: /etc/udev/rules.d/99-ublox-gps.rules
+    frame_id: gps_link
+    rate: 4.0                 # measurement rate [Hz] - u-blox 7 max ~5 Hz
+    nav_rate: 1               # nav solution every N measurements
+
+    dynamic_model: portable   # good default for ground vehicles
+    fix_mode: auto            # 2D/3D automatic
+
+    enable_ppp: false         # not supported by u-blox 7
+
+    gnss:
+      gps: true
+      glonass: false          # u-blox 7 is GPS-only (no GLONASS)
+      sbas: true              # SBAS (WAAS/EGNOS) corrections
+      galileo: false          # not supported by u-blox 7
+      beidou: false           # not supported by u-blox 7

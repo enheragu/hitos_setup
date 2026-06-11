@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hitos_setup</name>
+  <version>0.1.0</version>
+  <description>Setup scripts, launch files and web manager for the HITOS multiespectral system (Pi5).</description>
+  <maintainer email="enrique.he.ag@gmail.com">quique</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Runtime deps — the packages whose launches we include -->
+  <exec_depend>multiespectral_acquire</exec_depend>
+  <exec_depend>temperature_driver</exec_depend>
+  <exec_depend>ublox_gps</exec_depend>
+  <exec_depend>ouster_ros</exec_depend>
+
+  <!-- Web manager deps -->
+  <exec_depend>python3-flask</exec_depend>
+  <exec_depend>python3-flask-socketio</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

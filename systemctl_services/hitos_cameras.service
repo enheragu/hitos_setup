@@ -1,0 +1,28 @@
+# sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_cameras.service /etc/systemd/system/hitos_cameras.service
+[Unit]
+Description=HITOS Cameras - Multiespectral FLIR+Basler acquisition
+After=network.target hitos_ptp.service hitos_ptp_sync.service hitos_sensors.service
+Wants=network.target hitos_ptp.service hitos_ptp_sync.service hitos_sensors.service
+
+[Service]
+Type=simple
+User=arvc
+ExecStart=/bin/bash -c "\
+    source /home/arvc/ros2_ws/install/setup.bash && \
+    source /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/scripts/hitos_setup.sh && \
+    _hitos_export_ip && \
+    export SPINNAKER_GENTL64_CTI=/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti && \
+    if ! grep -qs '/media/arvc/DATASETS ' /proc/mounts; then \
+        udisksctl mount -b /dev/disk/by-label/DATASETS 2>/dev/null || true; \
+    fi && \
+    SESSION=$(date +'%%d-%%m-%%Y_%%Hh%%Mm') && \
+    ros2 launch multiespectral_acquire multiespectral_launch.py \
+        session_folder:=$SESSION \
+        dataset_output_path:=/media/arvc/DATASETS/images_eeha"
+KillSignal=SIGINT
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=65
+
+[Install]
+WantedBy=multi-user.target

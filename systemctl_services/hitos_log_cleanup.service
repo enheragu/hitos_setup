@@ -1,0 +1,18 @@
+[Unit]
+Description=HITOS — purge old ROS2 node logs from ~/.ros/log
+After=network.target
+
+[Service]
+Type=oneshot
+User=arvc
+# Two-pass cleanup of ~/.ros/log/ node log files:
+#   1. Any .log file > 200 MB regardless of age — these are spam (e.g. GPS error loops).
+#      A legitimate log from a healthy node never reaches 200 MB in one session.
+#   2. .log files and session directories older than 7 days.
+# journald (capped at 500 MB, 14d) is the primary debugging source for systemd services.
+ExecStart=/bin/bash -c '\
+  find /home/arvc/.ros/log -maxdepth 1 -name "*.log" -size +200M -delete; \
+  find /home/arvc/.ros/log -maxdepth 1 -name "*.log" -mtime +7 -delete; \
+  find /home/arvc/.ros/log -mindepth 1 -maxdepth 1 -type d -mtime +7 \
+       ! -name latest -exec rm -rf {} + ; \
+  journalctl --vacuum-time=14d'

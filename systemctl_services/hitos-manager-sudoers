@@ -1,0 +1,22 @@
+# Sudoers file for HITOS web manager process control
+# Install with:
+#   sudo cp /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos-manager-sudoers \
+#           /etc/sudoers.d/hitos-manager
+#   sudo chmod 440 /etc/sudoers.d/hitos-manager
+
+arvc ALL=(ALL) NOPASSWD: /usr/sbin/arp-scan --interface=eth0 --localnet
+arvc ALL=(ALL) NOPASSWD: /usr/sbin/iptables -nvxL HITOS_RX
+arvc ALL=(ALL) NOPASSWD: /usr/sbin/iptables -nvxL HITOS_TX
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl restart hitos_ptp.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl stop    hitos_ptp.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl restart hitos_ptp_sync.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl stop    hitos_ptp_sync.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl restart hitos_sensors.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl stop    hitos_sensors.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl restart hitos_cameras.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl stop    hitos_cameras.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl restart hitos_camera_gui.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl stop    hitos_camera_gui.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl restart hitos_web_manager.service
+arvc ALL=(ALL) NOPASSWD: /bin/systemctl stop    hitos_web_manager.service
+arvc ALL=(ALL) NOPASSWD: /sbin/shutdown -h now

@@ -1,0 +1,20 @@
+# Place in /etc/systemd/system/ or symlink:
+#   sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_web_manager.service \
+#              /etc/systemd/system/hitos_web_manager.service
+#   sudo systemctl daemon-reload && sudo systemctl enable hitos_web_manager
+
+[Unit]
+Description=HITOS Web Manager - Flask monitoring interface (port 5050)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=arvc
+ExecStart=/bin/bash -c "source /home/arvc/ros2_ws/install/setup.bash && \
+    python3 /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/web_manager/app.py"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

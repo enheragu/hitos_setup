@@ -1,0 +1,20 @@
+# Place in /etc/systemd/system/ or symlink:
+#   sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_camera_gui.service \
+#              /etc/systemd/system/hitos_camera_gui.service
+#   sudo systemctl daemon-reload && sudo systemctl enable hitos_camera_gui
+
+[Unit]
+Description=HITOS Camera GUI - Multiespectral camera interface (port 5051)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=arvc
+ExecStart=/bin/bash -c "source /home/arvc/ros2_ws/install/setup.bash && \
+    ros2 launch hitos_setup camera_gui.launch.py"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
