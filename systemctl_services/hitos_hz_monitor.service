@@ -1,0 +1,23 @@
+# sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_hz_monitor.service /etc/systemd/system/hitos_hz_monitor.service
+[Unit]
+Description=HITOS Hz Monitor - cheap C++ topic-rate monitor (publishes <topic>/hz)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=arvc
+# Type-erased rate monitor: counts arrivals on the high-rate sensor/camera
+# topics without deserializing, publishes <topic>/hz (std_msgs/Float64) at 1 Hz.
+# The web manager reads those /hz topics instead of subscribing to the raw
+# firehose itself. Auto-discovers topic types, so start order doesn't matter.
+ExecStart=/bin/bash -c "\
+    source /home/arvc/ros2_ws/install/setup.bash && \
+    ros2 launch hitos_setup hz_monitor.launch.py"
+KillSignal=SIGINT
+TimeoutStopSec=15
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

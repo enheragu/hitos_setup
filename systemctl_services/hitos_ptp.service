@@ -1,16 +1,24 @@
 # sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_ptp.service /etc/systemd/system/hitos_ptp.service
 [Unit]
 Description=HITOS PTP Master - IEEE 1588 clock sync on eth0 (cameras + LiDAR)
-After=network-online.target
-Wants=network-online.target
+# Start AFTER phc2sys has stamped the PHC to NTP-correct TAI (dependency
+# reversed 2026-06-15). Announcing only once the PHC is right means slaves do
+# their first acquisition (which STEPS) against the correct time and never have
+# to slew a later boot-clock correction. See hitos_ptp_sync.service.
+After=network-online.target hitos_ptp_sync.service
+Wants=network-online.target hitos_ptp_sync.service
 
 [Service]
 Type=simple
-ExecStartPre=/usr/sbin/ethtool -G eth0 rx 4096
+ExecStartPre=/usr/sbin/ethtool -G eth0 rx 8192
 ExecStartPre=/sbin/sysctl -w net.core.rmem_max=2147483647
 ExecStartPre=/sbin/sysctl -w net.core.rmem_default=2147483647
+ExecStartPre=/sbin/sysctl -w net.core.netdev_max_backlog=10000
 ExecStartPre=/sbin/sysctl -w net.ipv4.ipfrag_time=3
 ExecStartPre=/sbin/sysctl -w net.ipv4.ipfrag_high_thresh=134217728
+# Settle: give phc2sys (-S 1.0) its initial step to TAI (~1 s) before we start
+# announcing, so the PHC is already at TAI (not the intermediate UTC value).
+ExecStartPre=/bin/sleep 5
 ExecStart=/usr/sbin/ptp4l -f /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/config/ptp4l.conf -m
 Restart=on-failure
 RestartSec=5

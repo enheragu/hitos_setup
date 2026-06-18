@@ -6,8 +6,9 @@ ublox_gps_node:
 
     device: /dev/ublox_gps    # persistent symlink: /etc/udev/rules.d/99-ublox-gps.rules
     frame_id: gps_link
-    rate: 4.0                 # measurement rate [Hz] - u-blox 7 max ~5 Hz
-    nav_rate: 1               # nav solution every N measurements
+    rate: 5.0                 # measurement rate [Hz] — HARDWARE-limited (u-blox 7 nav engine ~5 Hz);
+                              # the driver only commands it, the module caps the actual rate.
+    nav_rate: 1               # nav solution every N measurements (1 = a fix per measurement)
 
     dynamic_model: portable   # good default for ground vehicles
     fix_mode: auto            # 2D/3D automatic

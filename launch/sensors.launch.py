@@ -27,7 +27,7 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('with_lidar')),
         ),
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource([hitos_share, '/launch/sensor_frames.launch.py']),
+            PythonLaunchDescriptionSource([hitos_share, '/launch/sensor_model.launch.py']),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource([hitos_share, '/launch/ekf.launch.py']),

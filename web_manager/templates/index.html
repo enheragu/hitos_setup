@@ -33,6 +33,10 @@
                     <span class="text">{{ gui.name }}</span>
                 </button>
                 {% endfor %}
+                <button class="btn btn-gui" id="mode-btn" onclick="showCalibModal()" title="Capture mode (normal / calibration)">
+                    <span class="icon">🎯</span>
+                    <span class="text">Mode</span>
+                </button>
             </div>
             <span class="status-indicator" id="connection-status">
                 <span class="dot"></span>
@@ -117,6 +121,33 @@
         <div class="modal-footer">
             <button class="btn btn-small" onclick="closeShutdownModal()">Cancel</button>
             <button class="btn btn-small btn-confirm-shutdown" onclick="confirmShutdown()">⏻ Shutdown</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal-overlay" id="calib-modal">
+    <div class="modal-content modal-confirm">
+        <div class="modal-header">
+            <h3>🎯 Capture Mode</h3>
+            <button class="modal-close" onclick="closeCalibModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Current mode: <strong id="calib-current">—</strong></p>
+            <p style="color:var(--text-muted);font-size:0.85rem;">
+                Calibration mode widens the Ouster azimuth (~250°), skips the FOV crop and
+                stores <em>all</em> data at full rate (synced frames keep their name,
+                intermediates as <code>&lt;name&gt;_n</code>) into a separate
+                <code>calib_</code> dataset. Switching restarts sensors + cameras
+                (~15-20&nbsp;s data gap). Recording itself is still the “Storing” toggle.
+            </p>
+            <label style="display:block;margin-top:0.6rem;">Visible camera Hz (calibration):
+                <input type="number" id="calib-hz" min="0.5" max="30" step="0.5" value="4"
+                       style="width:5em;margin-left:0.4rem;">
+            </label>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-small" onclick="applyCalibMode(false)">Normal mode</button>
+            <button class="btn btn-small btn-confirm-shutdown" onclick="applyCalibMode(true)">Activate calibration</button>
         </div>
     </div>
 </div>

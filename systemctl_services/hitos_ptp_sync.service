@@ -1,8 +1,14 @@
 # sudo ln -s /home/arvc/ros2_ws/src/hitos_setup/systemctl_services/hitos_ptp_sync.service /etc/systemd/system/hitos_ptp_sync.service
 [Unit]
 Description=HITOS PTP Sync - Sync PHC from CLOCK_REALTIME (eth0)
-After=hitos_ptp.service
-Requires=hitos_ptp.service
+# Runs BEFORE ptp4l now (dependency reversed 2026-06-15). phc2sys only needs
+# eth0, not ptp4l — it disciplines the PHC from CLOCK_REALTIME independently.
+# It must stamp the PHC to the NTP-correct TAI value before the master starts
+# announcing, otherwise slaves (Ouster/FLIR) lock onto the RPi's wrong boot
+# clock (no battery RTC → boots at 1970, NTP corrects seconds later) and then
+# only SLEW the correction forever (observed +5.5 s Ouster offset).
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -15,7 +21,7 @@ ExecStartPre=/bin/bash -c \
    done; \
    echo "WARNING: NTP not synced after 120s, setting PHC anyway"; exit 0'
 ExecStartPre=/usr/sbin/phc_ctl eth0 set
-ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c eth0 -m -O 37
+ExecStart=/usr/sbin/phc2sys -s CLOCK_REALTIME -c eth0 -m -O 37 -S 1.0
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10

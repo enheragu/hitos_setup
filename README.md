@@ -40,12 +40,12 @@ flowchart LR
     OUSTER["Ouster OS0-128U\n192.168.4.4"]
 
     subgraph USB_GRP["USB"]
+        FANS["Cooling fans ×3\n(direct USB)"]
         HUB["USB hub\n(5 V via splitter)"]
         GPS["u-blox 7 GPS\n/dev/ublox_gps"]
         DHT["DHT22 + NodeMCU\n/dev/ttyUSB0"]
         HDD[("External HDD\n/media/arvc/DATASETS")]
         ETH["USB Ethernet\nupstream"]
-        FANS["Cooling fans ×3\n(direct USB)"]
     end
 
     INJ    -->|passive PoE| SWITCH
@@ -120,9 +120,7 @@ flowchart LR
         DRV_LID["os_driver<br/>(ouster_ros)"]
         DRV_GPS["gnss<br/>(ublox_gps_driver)"]
         DHT_NODE["dht22_node<br/>(temperature_driver)"]
-        EKF1["ekf_local<br/>(robot_localization)"]
-        NAVSAT["navsat_transform<br/>(robot_localization)"]
-        EKF2["ekf_global<br/>(robot_localization)"]
+        LOC["Localization<br/>(robot_localization)<br/>EKF + navsat — see below"]
     end
 
     subgraph CAM_DRV["C++ Camera Drivers — multiespectral_acquire"]
@@ -158,6 +156,12 @@ flowchart LR
         GUI_CAM["Camera GUI · :5051"]
     end
 
+    subgraph HELP["Helpers — hitos_setup"]
+        RECAL["ouster_recal_node<br/>internal-osc→wall-clock"]
+        HZ["topic_hz_monitor"]
+        SMOOTH["gps_smoother<br/>GPS-only window filter"]
+    end
+
     OUSTER --> DRV_LID
     BASLER --> DRV_VIS
     FLIR_CAM --> DRV_LWIR
@@ -165,25 +169,18 @@ flowchart LR
     DHT_HW --> DHT_NODE
 
     DRV_LID --> PC_CROP & IMG_CROP
-    DRV_LID -->|/ouster/imu| EKF1
-    DRV_GPS -->|/gnss/fix| NAVSAT
-    EKF1 -->|/odometry/filtered| NAVSAT
-    EKF1 -->|/odometry/filtered| EKF2
-    NAVSAT -->|/odometry/gps| EKF2
+    DRV_LID -->|/ouster/imu| RECAL
 
     DRV_VIS --> B_VIS
     DRV_LWIR --> B_LWIR
     PC_CROP & IMG_CROP --> B_LIDAR
-    DRV_GPS --> B_GNSS
-    EKF2 -->|/odometry/combined| B_ODO
+    DRV_GPS -->|/gnss/fix| SMOOTH
+    DRV_GPS -->|/gnss/fix| LOC
+    LOC -->|/odometry/combined| B_ODO
     DHT_NODE --> B_DHT
-    EKF2 -->|/odometry/combined| WM
+    LOC -->|/odometry/combined| WM
 
-    DRV_VIS -.->|master trigger| B_LWIR
-    DRV_VIS -.->|master trigger| B_LIDAR
-    DRV_VIS -.->|master trigger| B_GNSS
-    DRV_VIS -.->|master trigger| B_ODO
-    DRV_VIS -.->|master trigger| B_DHT
+    DRV_VIS -.->|master trigger · 1 Hz| BUF
 
     B_VIS --> D_VIS
     B_LWIR --> D_LWIR
@@ -192,20 +189,91 @@ flowchart LR
     B_ODO --> D_ODO
     B_DHT --> D_DHT
 
+    RECAL -->|/ouster/imu_recal| LOC
+    RECAL -.->|/ouster/clock_offset| B_LIDAR
+    DRV_LID --> HZ
+    HZ -->|rates| WM
+    SMOOTH -->|/gnss/fix_smoothed| B_GNSS
+
     style HW      fill:#e8e8e8,stroke:#888,color:#333
     style EXT     fill:#ddd,stroke:#999,color:#555
     style CAM_DRV fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
     style CROP    fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
     style BUF     fill:#b8e6b8,stroke:#5aa55a,color:#1a3a1a
     style CTRL    fill:#ffcc99,stroke:#e6a040,color:#5a3510
+    style HELP    fill:#a8d5ff,stroke:#4a90d9,color:#1a3a5c
     style DISK    fill:#f5deb3,stroke:#c8a050,color:#5a4010
 
-    linkStyle 20,21,22,23,24 stroke:#e05050,stroke-width:2,stroke-dasharray:5
+    linkStyle 17 stroke:#e05050,stroke-width:2,stroke-dasharray:5
+```
+
+**Localization (EKF) chain** — expansion of the `Localization` box above (all `robot_localization`):
+
+```mermaid
+flowchart LR
+    IMU(["/ouster/imu_recal<br/>(ouster_recal_node)"])
+    FIX(["/gnss/fix<br/>(gnss)"])
+    EKF1["ekf_local"]
+    NAVSAT["navsat_transform"]
+    EKF2["ekf_global"]
+    OUT(["/odometry/combined<br/>→ Buffer Odom · web manager"])
+
+    IMU --> EKF1
+    FIX --> NAVSAT
+    EKF1 -->|/odometry/filtered| NAVSAT
+    EKF1 -->|/odometry/filtered| EKF2
+    NAVSAT -->|/odometry/gnss| EKF2
+    EKF2 --> OUT
+
+    style EKF1 fill:#ddd,stroke:#999,color:#333
+    style NAVSAT fill:#ddd,stroke:#999,color:#333
+    style EKF2 fill:#ddd,stroke:#999,color:#333
 ```
 
 **Legend:** <span style="color:#4a90d9">blue</span> = internal C++ nodes · <span style="color:#5aa55a">green</span> = Python buffers · <span style="color:#e6a040">orange</span> = web GUIs · <span style="color:#c8a050">tan</span> = disk · gray = hardware / external packages · <span style="color:#e05050">red dashed</span> = master trigger
 
-**Localization chain:** the entire pipeline depends on `/ouster/imu`. If the Ouster is unreachable, EKF local never produces `/odometry/filtered`, navsat_transform never initialises, and EKF global produces nothing. Buffer Odom uses `/odometry/combined` (GPS-fused) from EKF global.
+**Localization chain:** the entire pipeline depends on the Ouster IMU. `ekf_local` consumes `/ouster/imu_recal` (the IMU restamped to wall-clock by `ouster_recal_node`; the raw `TIME_FROM_INTERNAL_OSC` stamps are sensor uptime and would be rejected). If the Ouster is unreachable, EKF local never produces `/odometry/filtered`, navsat_transform never initialises, and EKF global produces nothing. Buffer Odom uses `/odometry/combined` (GPS-fused) from EKF global. The same `ouster_recal_node` feeds `/ouster/clock_offset` to the LiDAR buffer handlers so the cloud/images land on wall-clock for camera matching. See "Timestamp synchronization".
+
+## Sensor model & TF frames
+
+The static sensor TFs come from a single URDF/xacro, `urdf/hitos_sensors.urdf.xacro`, loaded by `launch/sensor_model.launch.py` (which `sensors.launch.py` includes, so it runs inside `hitos_sensors.service`). It needs the `xacro` package and replaced the old `static_transform_publisher` script. Run it alone + rviz (Fixed Frame `ip55_box`, add RobotModel + TF) to inspect the rig.
+
+Frame tree (all fixed joints):
+
+```
+base_link
+└─ ip55_box                       IP55 enclosure (232×182×95 mm); everything sits on its lid
+   ├─ multiespectral_base         camera-mount bottom-centre (on the lid, +velcro)
+   │  ├─ multiespectral_center / multiespectral_top
+   │  │                           └─ os_sensor      → driver adds os_lidar / os_imu (metadata)
+   │  └─ multiespectral_focal_base
+   │     ├─ visible_camera_frame  → visible_camera_optical_frame
+   │     └─ lwir_camera_frame     → lwir_camera_optical_frame
+   └─ gps_link                    GPS antenna (lid, +velcro)
+```
+
+`temp_box` + `dht22` (temp/humidity enclosure) are visual-only — no calibration frame.
+
+**These numbers are a SEED from the CAD, not a measured extrinsic** — an initial estimate for the LiDAR↔camera calibration to refine. Translations are taken exactly from the mount CAD; the IP55-box / GPS / temp-box placement from on-rig measurements (the three lid items sit on ~2 mm velcro pads, included in the joint offsets). The `os_sensor` yaw is pinned to 0 by the rear-facing connector + the forward crop window (see the xacro comment); `OUSTER_BASE_Z` ≈ 0.015 and `base_link→ip55_box` (vehicle mount) remain the main TODOs.
+
+**Meshes** (`meshes/`, referenced by the xacro; URDF accepts STL/DAE/OBJ, **not** STEP): `camera_pair_paralel_v2.stl` (mount bracket) and the camera bodies are exported from the mount CAD; `ouster_exterior.stl` is the OS1-exterior (noFOV) mesh — same housing as the OS0-128; `nodemcu_dht22_box.stl` + `dht22.stl` are the temp/humidity enclosure. The GPS (VK-162) and the optical-window two-tone of the Ouster are drawn by the render script (below); rviz shows the meshes with the flat `<material>` colours from the xacro.
+
+**Renders** — `scripts/render_model_vtk.py` (VTK off-screen, transparent PNGs into `media/`; run from the package: `xvfb-run -a python3 scripts/render_model_vtk.py`). A no-xvfb matplotlib fallback lives in `scripts/render_model.py` (rougher: no z-buffer). Each row is solid / translucent + TF frames / frames-only; the second set overlays the camera + LiDAR-crop FOV frustums (Basler blue, FLIR red, Ouster-crop green):
+
+<table>
+<tr><th align="center">Solid</th><th align="center">Translucent + frames</th><th align="center">Frames only</th></tr>
+<tr>
+  <td><img src="media/sensor_solid.png" width="250" alt="rig solid"></td>
+  <td><img src="media/sensor_translucent_frames.png" width="250" alt="rig translucent + frames"></td>
+  <td><img src="media/sensor_frames_only.png" width="250" alt="rig frames only"></td>
+</tr>
+<tr><th align="center" colspan="3">+ FOV frustums (Basler · FLIR · Ouster crop)</th></tr>
+<tr>
+  <td><img src="media/sensor_fov_solid.png" width="250" alt="FOV solid"></td>
+  <td><img src="media/sensor_fov_translucent_frames.png" width="250" alt="FOV translucent + frames"></td>
+  <td><img src="media/sensor_fov_frames_only.png" width="250" alt="FOV frames only"></td>
+</tr>
+</table>
 
 ## Dependencies
 
@@ -214,7 +282,7 @@ flowchart LR
 | `ouster_ros` | [ouster-lidar/ouster-ros](https://github.com/ouster-lidar/ouster-ros) | Ouster LiDAR driver |
 | `ublox_gps_driver` | [KumarRobotics/ublox](https://github.com/KumarRobotics/ublox) | u-blox GPS driver |
 | `robot_localization` | [cra-ros-pkg/robot_localization](https://github.com/cra-ros-pkg/robot_localization) | EKF sensor fusion + navsat_transform |
-| `multiespectral_acquire` | [enheragu/multiespectral_acquire](https://github.com/enheragu/multiespectral_acquire) | Camera drivers, crop nodes, acquisition pipeline, web GUI |
+| `multiespectral_acquire` | [enheragu/multiespectral_acquire](https://github.com/enheragu/multiespectral_acquire) | Camera drivers, crop nodes, acquisition pipeline; the web GUI lives in its companion `multiespectral_acquire_gui` package |
 
 ---
 
@@ -240,6 +308,7 @@ sudo ln -sf $(pwd)/hitos_ptp.service           /etc/systemd/system/
 sudo ln -sf $(pwd)/hitos_ptp_sync.service      /etc/systemd/system/
 sudo ln -sf $(pwd)/hitos_sensors.service       /etc/systemd/system/
 sudo ln -sf $(pwd)/hitos_cameras.service       /etc/systemd/system/
+sudo ln -sf $(pwd)/hitos_sync.service          /etc/systemd/system/
 sudo ln -sf $(pwd)/hitos_camera_gui.service    /etc/systemd/system/
 sudo ln -sf $(pwd)/hitos_web_manager.service   /etc/systemd/system/
 sudo ln -sf $(pwd)/hitos_log_cleanup.service   /etc/systemd/system/
@@ -247,8 +316,41 @@ sudo ln -sf $(pwd)/hitos_log_cleanup.timer     /etc/systemd/system/
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now hitos_iptables hitos_ptp hitos_ptp_sync \
-    hitos_sensors hitos_cameras hitos_camera_gui hitos_web_manager \
+    hitos_sensors hitos_cameras hitos_sync hitos_camera_gui hitos_web_manager \
     hitos_log_cleanup.timer
+```
+
+**Camera/sync service split** — `hitos_cameras.service` runs only the two camera
+drivers (`cameras_only.launch.py`); `hitos_sync.service` runs the lidar crop
+nodes and the buffer compositor (`capture_sync.launch.py`). The session folder
+is generated by `hitos_cameras` and shared through `/tmp/hitos_session.env`.
+`hitos_sync` has `PartOf=hitos_cameras.service`, so restarting the cameras also
+restarts the sync side (new session), while `hitos_sync` can be restarted alone
+without interrupting the cameras. Starting them in order also staggers the
+CPU/RAM peaks of Pylon/Spinnaker init and the Python compositor imports.
+If you change `output_frame_rate`, change it in BOTH services (or pass it to
+both launches).
+
+**Ouster lifecycle auto-recovery** — `hitos_sensors.service` runs
+`scripts/ouster_lifecycle_recover.sh` in the background after start: it waits
+for the sensor HTTP API, re-drives `/ouster/os_driver` to `active` if the
+boot-timing race left it `unconfigured` (the launch only tries CONFIGURE once),
+and then saves the applied config to the sensor flash. Check its output with
+`journalctl -u hitos_sensors | grep ouster-recover`.
+
+**One-time Ouster flash config** — after enabling services and confirming the sensor is online, save the current config to the Ouster's internal flash. This prevents ouster_ros from reinitializing the sensor on every driver startup (slow, and it disrupts the running timing/recal):
+
+```bash
+# Verify sensor is reachable and has correct settings first
+curl -s http://192.168.4.4/api/v1/sensor/config | python3 -m json.tool | grep timestamp_mode
+# Should print: "timestamp_mode": "TIME_FROM_INTERNAL_OSC"  (PTP unusable — see Timestamp synchronization)
+
+# Persist config to flash
+curl -s -X POST http://192.168.4.4/api/v1/sensor/cmd/save_config_params
+# Returns {} on success
+
+# Repeat this step any time ouster_params.yaml is changed and rebuilt,
+# so the driver and the sensor's stored flash config stay in sync.
 ```
 
 ## Network configuration
@@ -380,12 +482,92 @@ sudo du -sh /var/log/syslog /var/log/journal
 journalctl -u hitos_sensors --since "1 hour ago" | wc -l
 ```
 
+## Timestamp synchronization (sensor clocks → wall-clock)
+
+All stored data must share **one timescale** so the buffer compositor can match each
+camera trigger to the nearest LiDAR scan / GNSS fix / etc. That timescale is the
+RPi's `CLOCK_REALTIME` (wall-clock). How each sensor gets there:
+
+| Sensor | Clock | How it reaches wall-clock |
+|--------|-------|---------------------------|
+| Basler (visible, trigger) | camera crystal | software `TimestampCalibration` (we control the software trigger → low-latency reference) |
+| FLIR A68 (LWIR) | camera crystal | software `TimestampCalibration` (free-runs at 30 Hz; calibrated from frame arrival) |
+| Ouster (points, images, IMU) | sensor internal oscillator | `ouster_recal_node` (see below) |
+| GNSS, DHT22 | — | already stamped in system time by their drivers |
+
+### Why not PTP (and what the RPi 5 master actually does)
+
+The intended design was IEEE-1588 PTP: `hitos_ptp.service` (ptp4l) as grandmaster on
+`eth0`, `hitos_ptp_sync.service` (phc2sys) disciplining the NIC PHC to TAI, and the
+Ouster + FLIR slaving to it. **The RPi 5 master is verified-perfect** (pcap analysis
+2026-06-15: Sync/Follow-Up/Delay-Resp timestamps are exactly capture-time + 37 s = TAI,
+correction field 0; `phc2sys` holds the PHC to ±100 ns). The RP1 NIC supports hardware
+timestamping (`ethtool -T eth0` → hardware-tx/rx, `/dev/ptp0`).
+
+**But neither slave locks.** The Ouster's PTP servo reports a persistent *negative*
+`mean_path_delay` (~−2 s) and bounces ±5 s; the FLIR A68 stays in `Synchronizing` and
+never reaches `Locked`. Both slaves fail behind the **Mokerlink EXT-104GAF switch**
+while image data flows fine — pointing at the switch's PTP handling (it is not a
+transparent clock) or a per-sensor/firmware issue, **not** the RPi. It worked on the
+Husky; the discriminating on-site test is to connect the Ouster directly to the Pi's
+`eth0` (bypass the switch). Until then PTP is not usable for the Ouster.
+
+> Note: the RPi 5 has **no battery-backed RTC** — it boots at 1970 and NTP corrects the
+> clock seconds later. `hitos_ptp_sync` starts before `hitos_ptp` (dependency reversed
+> 2026-06-15) and both wait for NTP, so the master only ever announces an NTP-correct
+> clock. This avoids slaves locking onto a wrong boot clock and then slewing the
+> correction — but does not fix the switch-level PTP failure above.
+
+### Ouster workaround: IMU-calibrated internal oscillator
+
+With PTP unusable, the Ouster runs `timestamp_mode: TIME_FROM_INTERNAL_OSC` — a stable
+free-running crystal shared by **all** its outputs (points, images, IMU). `ouster_recal_node`
+(C++, `hitos_setup/src/`, launched by `lidar.launch.py`) maps that clock to wall-clock:
+
+- Subscribes `/ouster/imu` (100 Hz). The IMU is the ideal calibration source: high-rate
+  (stable EMA), tiny (lowest transfer latency → offset ≈ true clock offset), and on the
+  same clock as the cloud.
+- `offset = EMA(now_wall − internal_stamp)` (integer EMA, ~1 s window).
+- Publishes `/ouster/imu_recal` (IMU restamped to wall-clock — verified ±1 ms — consumed
+  by `ekf_local`, since raw uptime stamps would be rejected) and `/ouster/clock_offset`
+  (`std_msgs/Float64`, RELIABLE + TRANSIENT_LOCAL).
+
+The buffer compositor's Ouster handlers apply that offset via the **generic**
+`clock_offset_topic` parameter (see `multiespectral_acquire`) — the compositor logic
+stays sensor-agnostic; only the handler config wires `/ouster/clock_offset` to the five
+Ouster sync handlers. Result (verified 2026-06-15): `ouster/points_sync` and the image
+`_sync` topics match the 1 Hz camera trigger.
+
+**Precision**: relative timing is exact (shared crystal); the absolute anchor carries the
+IMU's (sub-ms) transfer latency. Good for dataset-level fusion, not the ns of true PTP.
+If PTP is ever fixed (switch bypass), revert `timestamp_mode` to `TIME_FROM_PTP_1588`,
+`ekf_local imu0` to `/ouster/imu`, and drop `clock_offset_topic` from the handler config.
+
+### New helper nodes / services (2026-06-15)
+
+- `ouster_recal_node` (C++) — internal-osc → wall-clock, above.
+- `topic_hz_monitor` (C++) — publishes `<topic>/hz` (`std_msgs/Float64`) for high-rate
+  topics so the Python web manager reads rates from tiny topics instead of subscribing to
+  the firehose (cut the web manager from 60 % to ~5 % CPU). Service `hitos_hz_monitor`.
+- `gps_smoother_node.py` (launched by `gps.launch.py`) — the dataset is stored at the ~1 Hz
+  trigger but the u-blox runs at 5 Hz, so most fixes would be discarded. This node refines
+  `/gnss/fix` into `/gnss/fix_smoothed` (`NavSatFix`) using a **sliding-window linear fit
+  evaluated at the latest instant** — pure GPS, **no IMU** (unlike navsat's `/gps/filtered`,
+  which is the IMU-fused EKF state and not useful on a hand-carried rig with gyro-only heading).
+  The fit (not a plain mean) avoids smearing while walking; the window adapts to the fitted
+  speed; covariance is reduced toward 1/N but floored (GPS error is temporally correlated).
+  No-fix messages (huge covariance) are rejected. `hitos_sync.service` points the GNSS buffer
+  at `/gnss/fix_smoothed`. The raw `/gnss/fix` still feeds navsat for the EKF.
+- `hitos_sync.service` — buffer compositor + LiDAR crop, split from `hitos_cameras`
+  (cameras only). `PartOf=hitos_cameras` (camera restart → sync restart); session shared
+  via `/tmp/hitos_session.env`.
+
 ## Known issues
 
 ### Active
 
 - **EKF chain dependency**: the entire localization pipeline (`ekf_local` → `navsat_transform` → `ekf_global`) depends on `/ouster/imu`. If the Ouster is not reachable the whole chain is silent. With no magnetometer and no wheel odometry, heading estimation relies on gyroscope integration only and will drift — a fundamental hardware limitation.
-- **Ouster no returns in azimuth window**: if `/ouster/points` publishes but the point cloud is empty, check the physical orientation of the sensor housing. `azimuth_window_start: 165000` / `azimuth_window_end: 195000` assumes the cable connector faces the rear (0° = connector). Adjust if the sensor is rotated.
+- **Ouster no returns in azimuth window**: if `/ouster/points` publishes but the point cloud is empty, check the physical orientation of the sensor housing. The current `azimuth_window_start: 152000` / `azimuth_window_end: 202000` is a 50° window re-pointed toward the camera forward (note: encoder and image-column convention are inverted — *decreasing* the window moves the valid region right). Adjust if the sensor housing is rotated.
 - **Power budget**: the switch is powered via its PoE uplink using a passive 55 V / 1.5 A (≈82 W) injector — adequate for current load. If the Basler is not detected at startup under heavy load, power the RPi 5 separately via USB-C or use the switch's DC barrel jack (48 V / 2 A) as primary input instead of the PoE uplink.
 - **Ouster link-local fallback**: if the sensor is factory-reset and reverts to its link-local IP (`169.254.x.x`), `hitos_iptables.service` adds the route automatically. Reconfiguring the sensor to `192.168.4.4` eliminates this.
 - **Dynamic LiDAR/IMU ports**: the Ouster chooses ports dynamically. If iptables rules are missing, return UDP packets may be dropped. Verify with `sudo iptables -L HITOS_RX -v`.
@@ -394,14 +576,14 @@ journalctl -u hitos_sensors --since "1 hour ago" | wc -l
 <details>
 <summary><strong>Resolved issues</strong> (fixed — expand for diagnostics if they resurface)</summary>
 
-- **Ouster driver stuck "activating" / `rx_resource_errors` on eth0** *(fixed 2026-06-11)*: `ouster_ros` expects `azimuth_window_start` and `azimuth_window_end` as separate integers — a `azimuth_window: [...]` list is silently ignored and the sensor defaults to full 360° (~640 UDP/s). The RPi 5 GbE ring buffer (default 512 slots) overflows at that rate; the kernel discards all incoming UDP and the driver never leaves "activating". **Fix**: params corrected in `ouster_params.yaml`; `hitos_ptp.service` ExecStartPre now runs `ethtool -G eth0 rx 4096` and the four sysctl settings from `ouster_ros/util/network-configure.bash` (rmem 2 GiB, ipfrag_time 3 s, ipfrag_high_thresh 128 MiB). Diagnostic: `ethtool -S eth0 | grep rx_resource_errors` — if it climbs fast (~60 K/min) the ring is overflowing.
+- **Ouster driver stuck "activating" / `rx_resource_errors` on eth0** *(fixed 2026-06-11)*: `ouster_ros` expects `azimuth_window_start` and `azimuth_window_end` as separate integers — a `azimuth_window: [...]` list is silently ignored and the sensor defaults to full 360° (~640 UDP/s). The RPi 5 GbE ring buffer (default 512 slots) overflows at that rate; the kernel discards all incoming UDP and the driver never leaves "activating". **Fix**: params corrected in `ouster_params.yaml`; `hitos_ptp.service` ExecStartPre now runs `ethtool -G eth0 rx 8192` and the sysctl settings from `ouster_ros/util/network-configure.bash` (rmem 2 GiB, netdev_max_backlog 10000, ipfrag_time 3 s, ipfrag_high_thresh 128 MiB). Diagnostic: `ethtool -S eth0 | grep rx_resource_errors` — if it climbs fast (~60 K/min) the ring is overflowing.
 - **GPS USB re-enumeration** *(fixed 2026-06-10)*: after a PoE glitch the u-blox 7 can re-enumerate as `/dev/ttyACM1`, triggering an "End of file" spin-loop at ~60 % CPU that saturates journald and rsyslogd. Fix: udev symlink `/dev/ublox_gps` (rule in `/etc/udev/rules.d/99-ublox-gps.rules`). Recovery: `sudo systemctl restart hitos_sensors.service`.
 - **Ouster slow init after GPS spin-loop** *(fixed 2026-06-10)*: CPU overload from the GPS spin-loop caused the Ouster to wait up to 20 min for its first packet. Root cause (GPS spin-loop) is fixed. The Ouster still takes ~30–60 s to boot after power-on plus 1–2 min for PTP sync.
 - **USB hub dropout every ~175 s** *(fixed 2026-06-10, hardware)*: the PoE switch cut power to the splitter port every ~175 s when it detected no Ethernet link. Fix: splitter's Ethernet data port is now wired to the Ouster's secondary Ethernet port, keeping the link permanently up. Diagnostic: `journalctl -b 0 -k | grep over-current` (should be empty).
 - **PTP PHC large initial offset** *(fixed)*: `hitos_ptp_sync.service` was setting the PHC before NTP synced, causing multi-minute PTP lock delays at boot. Fix: `ExecStartPre` now polls `timedatectl show -p NTPSynchronized` for up to 120 s before stamping.
 - **RAM pressure from buffer compositor** *(fixed 2026-06-11)*: `buffer_compositor_node.py` defaulted to 100–120 items per handler; with full 360° Ouster data each PointCloud2 buffer slot was ~5 MB, reaching 1.4 GB total. Fix: per-handler configurable sizes (now 15–60 items) plus the azimuth_window fix. Current full-load RSS with VS Code open: ~2.2 GB used, ~1.7 GB available.
 - **`hitos_ptp_sync.service` boot dependency** *(fixed)*: `After=time-sync.target` was ineffective on Ubuntu (systemd-timesyncd never activates that target). Fixed with the NTP polling `ExecStartPre` above.
-- GPS driver logs at ERROR level on disconnect — silenced with `--log-level ublox_gps:=WARN` in `gps.launch.py`.
+- GPS driver logs at ERROR level on disconnect — silenced with `--log-level gnss:=WARN` in `gps.launch.py`.
 - FLIR camera requires `SPINNAKER_GENTL64_CTI` — set in `/etc/profile.d/setup_spinnaker_gentl_64.sh`; cameras service exports it explicitly.
 
 </details>

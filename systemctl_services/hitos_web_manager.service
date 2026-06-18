@@ -11,7 +11,16 @@ Wants=network.target
 [Service]
 Type=simple
 User=arvc
-ExecStart=/bin/bash -c "source /home/arvc/ros2_ws/install/setup.bash && \
+# The C++ topic_hz_monitor is launched in-process here (backgrounded) instead of
+# as its own systemd unit / dashboard card: it exists only to feed the web manager
+# cheap <topic>/hz rates. It dies with this service (KillMode=control-group, the
+# default). Disable the old standalone unit once:
+#   sudo systemctl disable --now hitos_hz_monitor
+# NOTE: 'source' must run in the foreground shell (use ';', not '&&') — otherwise
+# 'source && ros2 launch &' backgrounds the source too and python3 app.py starts
+# WITHOUT the ROS env (ModuleNotFoundError: sensor_msgs).
+ExecStart=/bin/bash -c "source /home/arvc/ros2_ws/install/setup.bash; \
+    ros2 launch hitos_setup hz_monitor.launch.py & \
     python3 /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/web_manager/app.py"
 Restart=on-failure
 RestartSec=5

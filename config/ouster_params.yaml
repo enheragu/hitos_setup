@@ -1,20 +1,40 @@
 ouster/os_driver:
   ros__parameters:
     sensor_hostname: '192.168.4.4'
-    timestamp_mode: 'TIME_FROM_PTP_1588'
-    lidar_mode: '1024x10'
-    # 30° window centred on the front of the sensor.
-    # Driver expects two separate params, NOT a list.
-    # If 0° = cable connector (typical): front is at 180° → start=165000, end=195000
-    # If 0° = front (arrow marking):                front is at   0° → start=345000, end=15000
-    azimuth_window_start: 165000
-    azimuth_window_end: 195000
+    # INTERNAL_OSC: PTP won't lock (switch/HW issue), so use the sensor's stable
+    # internal crystal. A recal node uses the 100 Hz IMU to map internal→wall-clock
+    # and restamps IMU (for EKF) + provides the offset to the compositor (for lidar).
+    timestamp_mode: 'TIME_FROM_INTERNAL_OSC'
+    # 2048x10: highest azimuth resolution (0.18°/col) at 10 Hz. Denser cloud both
+    # for the cropped normal datasets and for calibration. The azimuth window below
+    # is angular (millidegrees), so it is mode-invariant; the destagger stripe-free
+    # region is angular too (±11.25° at any resolution), so the FOV crop bounds in
+    # the launch files stay valid. Calibration mode widens this window via the
+    # launch (HITOS_CALIB) without changing the mode.
+    lidar_mode: '2048x10'
+    # 50° window centred on the camera FOV. Must be wider than the 30° camera FOV to
+    # compensate for the OS-0-128 pixel stagger (±32 cols at 1024x10). After destagger,
+    # the guaranteed valid column range = [raw_start - min_shift, raw_end - max_shift]
+    # = [455 - (-32), 597 - 31] = [487, 566], which exactly covers the crop cols [487, 566].
+    # Moves the valid azimuth region toward the camera forward. NOTE: encoder and
+    # the image h-convention are INVERTED — DECREASING the window moves the cropped
+    # data RIGHT (+h). Was 160000/210000 (data ~7° left of cameras). Width kept 50°
+    # (the ±32-col destagger needs it for a camera-width stripe-free crop).
+    azimuth_window_start: 152000
+    azimuth_window_end: 202000
     lidar_port: 7502
     imu_port: 7503
     sensor_frame: os_sensor
     lidar_frame: os_lidar
     imu_frame: os_imu
     point_cloud_frame: os_lidar
-    organized: true
+    # organized=false: publish a DENSE cloud (valid points only, ~0.85 MB) instead
+    # of the full 1024x128 grid (6.29 MB, 87% zeros outside the azimuth window).
+    # Lets the Python compositor receive the cloud at the full 10 Hz. Requires the
+    # pointcloud_crop_node to filter by angle (not row/col index) — see that node.
+    organized: false
     destagger: true
     point_type: original
+    use_system_default_qos: false
+    # PHC=TAI (phc2sys -O 37 -S 1.0). Driver converts TAI→UTC with -37s offset.
+    ptp_utc_tai_offset: -37.0

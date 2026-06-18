@@ -51,8 +51,8 @@ _LATCHING_QOS = QoSProfile(
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
 )
 
-# Topics that benefit from BEST_EFFORT (high-rate sensor data)
-_BEST_EFFORT_TOPICS = {'/ouster/points', '/ouster/imu'}
+# All Ouster driver topics use BEST_EFFORT (use_system_default_qos=false in ouster_params.yaml)
+_BEST_EFFORT_TOPICS = {'/ouster/imu', '/ouster/points'}
 
 
 class TopicMonitor:
@@ -60,17 +60,17 @@ class TopicMonitor:
 
     def __init__(self, node: Node, name: str, topic: str, msg_type,
                  show: str = 'hz', data_field: str = None,
-                 extra_fields: dict = None):
+                 extra_fields: dict = None, rate_from: str = None):
         self.name = name
         self.topic = topic
         self.show = show
         self.data_field = data_field
         self.extra_fields = extra_fields or {}
+        self.rate_from = rate_from
 
         self._lock = threading.Lock()
-        self._history = deque(maxlen=5)
+        self._timestamps: deque = deque(maxlen=10)  # keep last 10 arrivals (adaptive window)
         self._freq_history: deque = deque(maxlen=300)
-        self._msg_count = 0
         self._last_update = time.monotonic()
         self._last_msg_time = 0.0
         self._frequency: Optional[float] = None
@@ -78,10 +78,26 @@ class TopicMonitor:
         self._extra_data: Dict[str, Any] = {}
 
         self._reset_timeout = 3.0
-        self._metric_interval = 1.0
+        self._metric_interval = 1.0         # freq_history push interval
         self._start_time = time.monotonic()
         self._last_hist_push_time = 0.0
         self._null_entries_added = 0
+
+        # Offloaded rate: instead of subscribing to the (possibly high-rate /
+        # large) data topic and counting here, read the frequency that the C++
+        # topic_hz_monitor already publishes as std_msgs/Float64 on <topic>/hz.
+        # Keeps the Python web manager off the sensor firehose entirely.
+        if rate_from:
+            from std_msgs.msg import Float64
+            try:
+                node.create_subscription(
+                    Float64, rate_from, self._rate_callback, _RELIABLE_QOS)
+                node.get_logger().info(
+                    f'[TopicMonitor] {name}: rate from {rate_from}')
+            except Exception as e:
+                node.get_logger().warning(
+                    f'[TopicMonitor] {name}: failed to subscribe to {rate_from}: {e}')
+            return
 
         if msg_type is None:
             node.get_logger().warning(
@@ -90,25 +106,55 @@ class TopicMonitor:
 
         qos = _BEST_EFFORT_QOS if topic in _BEST_EFFORT_TOPICS else _RELIABLE_QOS
 
-        # For hz-only monitors with no extra_fields, use a generic (untyped) subscription
-        # to avoid Python deserialization of large messages (e.g. PointCloud2).
+        # hz-only monitors subscribe with raw=True: the callback receives the
+        # serialized bytes and rclpy never deserializes the message. (A typed
+        # subscription deserializes BEFORE the callback runs, so for hz-only
+        # topics like /ouster/points or the 30 Hz LWIR stream we were paying
+        # full Python deserialization just to count arrivals.)
+        hz_only = not (self.data_field or self.extra_fields)
+        callback = self._hz_callback if hz_only else self._callback
         try:
-            node.create_subscription(msg_type, topic, self._callback, qos)
+            node.create_subscription(msg_type, topic, callback, qos, raw=hz_only)
         except Exception as e:
             node.get_logger().warning(f'[TopicMonitor] {name}: failed to subscribe: {e}')
 
     # ------------------------------------------------------------------
 
+    def _tick(self, now: float):
+        """Shared sliding-window frequency update. Must be called under self._lock."""
+        self._timestamps.append(now)
+        self._last_msg_time = now
+        if len(self._timestamps) >= 2:
+            span = self._timestamps[-1] - self._timestamps[0]
+            self._frequency = (len(self._timestamps) - 1) / span if span > 0 else None
+        if now - self._last_update >= self._metric_interval:
+            self._freq_history.append(round(self._frequency, 2) if self._frequency else None)
+            self._last_hist_push_time = now
+            self._null_entries_added = 0
+            self._last_update = now
+
     def _hz_callback(self, _msg):
         """Lightweight callback for hz-only monitors: counts arrivals, no deserialization."""
         with self._lock:
+            self._tick(time.monotonic())
+
+    def _rate_callback(self, msg):
+        """Frequency comes pre-computed (Float64) from topic_hz_monitor.
+
+        We don't count arrivals; we adopt the published Hz directly. The /hz
+        heartbeat itself (1 Hz) keeps _last_msg_time fresh so the stale-timeout
+        only fires if the monitor node stops, not when the data topic is idle —
+        a 0.0 rate correctly renders as N/A while still 'live'.
+        """
+        with self._lock:
             now = time.monotonic()
-            self._msg_count += 1
             self._last_msg_time = now
+            self._frequency = msg.data if msg.data and msg.data > 0.0 else None
             if now - self._last_update >= self._metric_interval:
-                self._history.append(self._msg_count)
-                self._frequency = sum(self._history) / len(self._history)
-                self._msg_count = 0
+                self._freq_history.append(
+                    round(self._frequency, 2) if self._frequency else None)
+                self._last_hist_push_time = now
+                self._null_entries_added = 0
                 self._last_update = now
 
     def _get_nested_attr(self, obj, path: str):
@@ -122,17 +168,7 @@ class TopicMonitor:
     def _callback(self, msg):
         with self._lock:
             now = time.monotonic()
-            self._msg_count += 1
-            self._last_msg_time = now
-
-            if now - self._last_update >= self._metric_interval:
-                self._history.append(self._msg_count)
-                self._frequency = sum(self._history) / len(self._history)
-                self._freq_history.append(round(self._frequency, 2))
-                self._last_hist_push_time = now
-                self._null_entries_added = 0
-                self._msg_count = 0
-                self._last_update = now
+            self._tick(now)
 
             if self.show == 'data' and self.data_field:
                 self._last_data = self._get_nested_attr(msg, self.data_field)
@@ -186,6 +222,7 @@ class TopicMonitor:
                          now - self._last_msg_time >= self._reset_timeout)
             if timed_out:
                 self._frequency = None
+                self._timestamps.clear()
                 if self.show == 'hz':
                     self._extra_data = {}
             if self.show == 'hz' and self._frequency is None:
@@ -239,7 +276,9 @@ class ProcessMonitor:
         self.processes = processes
         self._cache: Dict[str, dict] = {}
         self._cache_time = 0.0
-        self._cache_ttl = 1.0
+        # 3 s: each refresh runs `systemctl is-active` per service (now 6 of
+        # them). Service up/down state doesn't need sub-second resolution.
+        self._cache_ttl = 3.0
         self._lock = threading.Lock()
 
     def _is_active(self, config: dict) -> bool:
@@ -355,6 +394,14 @@ class HitosMonitor(Node):
         self._net_prev: Dict[str, dict] = {}
         self._bool_publishers = {}
 
+        # Caches for subprocess-heavy status (dashboard polls at 1 Hz).
+        self._sysinfo_cache: Optional[dict] = None
+        self._sysinfo_cache_time = 0.0
+        self._sysinfo_ttl = 5.0
+        self._iptables_cache: Optional[dict] = None
+        self._iptables_cache_time = 0.0
+        self._iptables_ttl = 5.0
+
         from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
         for group, topics in topic_groups.items():
             self._topic_monitors[group] = {}
@@ -367,6 +414,7 @@ class HitosMonitor(Node):
                     show=cfg.get('show', 'hz'),
                     data_field=cfg.get('data_field'),
                     extra_fields=cfg.get('extra_fields'),
+                    rate_from=cfg.get('rate_from'),
                 )
                 self._topic_monitors[group][tname] = mon
 
@@ -469,7 +517,16 @@ class HitosMonitor(Node):
         return result
 
     def _read_iptables_stats(self) -> dict:
-        """Read per-IP byte counts from iptables HITOS_RX and HITOS_TX chains."""
+        """Read per-IP byte counts from iptables HITOS_RX and HITOS_TX chains.
+
+        Cached: each call is two sudo iptables subprocesses; at the 1 Hz
+        dashboard poll that was a needless fork/exec every second.
+        """
+        now = time.monotonic()
+        if (self._iptables_cache is not None
+                and now - self._iptables_cache_time < self._iptables_ttl):
+            return self._iptables_cache
+
         import re
         rx_bytes = {}
         tx_bytes = {}
@@ -493,10 +550,66 @@ class HitosMonitor(Node):
                 'rx_bytes': rx_bytes.get(ip, 0),
                 'tx_bytes': tx_bytes.get(ip, 0),
             }
+        self._iptables_cache = result
+        self._iptables_cache_time = now
         return result
 
     def get_system_info(self) -> dict:
+        # Fast metrics: cheap /proc reads, recomputed every call so the CPU/RAM
+        # graphs stay smooth at the 1 Hz dashboard poll. Everything that needs a
+        # subprocess (disk df, serial readlink, ptp pgrep/journalctl) lives in
+        # _slow_system_info() and is cached — at 1 Hz this used to fork ~8 procs
+        # per poll and pin the web manager at ~60% CPU.
+        meminfo = self._read_proc_meminfo()
+        mem_total_mb = meminfo.get('MemTotal', 0) // 1024
+        mem_avail_mb = meminfo.get('MemAvailable', 0) // 1024
+        mem_used_mb  = mem_total_mb - mem_avail_mb
+        mem_pct      = round(mem_used_mb / mem_total_mb * 100, 1) if mem_total_mb > 0 else 0.0
+        swap_total_mb = meminfo.get('SwapTotal', 0) // 1024
+        swap_free_mb  = meminfo.get('SwapFree', 0) // 1024
+        swap_used_mb  = swap_total_mb - swap_free_mb
+        swap_pct      = round(swap_used_mb / swap_total_mb * 100, 1) if swap_total_mb > 0 else 0.0
+
+        # Per-core CPU via /proc/stat delta
+        curr_cores = self._read_proc_stat_cores()
+        cpu_pcts = []
+        for i in range(4):
+            name = f'cpu{i}'
+            if name in curr_cores and name in self._cpu_prev:
+                d_total = curr_cores[name]['total'] - self._cpu_prev[name]['total']
+                d_idle  = curr_cores[name]['idle']  - self._cpu_prev[name]['idle']
+                pct = round((1.0 - d_idle / d_total) * 100.0, 1) if d_total > 0 else 0.0
+                cpu_pcts.append(max(0.0, min(100.0, pct)))
+            else:
+                cpu_pcts.append(0.0)
+        self._cpu_prev = curr_cores
+
+        slow = self._slow_system_info(mem_used_mb, mem_total_mb, mem_pct)
+
+        return {
+            'env': slow['env'],
+            'ptp_active': slow['ptp_active'],
+            'ptp_offsets': slow['ptp_offsets'],
+            'metrics': {
+                'cpu_cores': cpu_pcts,
+                'ram':  {'pct': mem_pct,  'used_mb': mem_used_mb,  'total_mb': mem_total_mb},
+                'swap': {'pct': swap_pct, 'used_mb': swap_used_mb, 'total_mb': swap_total_mb},
+            },
+        }
+
+    def _slow_system_info(self, mem_used_mb, mem_total_mb, mem_pct) -> dict:
+        """Subprocess-heavy system info (disk, serial ports, PTP), cached.
+
+        Returns {env, ptp_active, ptp_offsets}. Refreshed at most every
+        _sysinfo_ttl seconds; none of these change meaningfully at 1 Hz.
+        """
+        import os
         import subprocess
+
+        now = time.monotonic()
+        if (self._sysinfo_cache is not None
+                and now - self._sysinfo_cache_time < self._sysinfo_ttl):
+            return self._sysinfo_cache
 
         def _read(path, fallback='N/A'):
             try:
@@ -527,34 +640,7 @@ class HitosMonitor(Node):
             pass
 
         model = _read('/proc/device-tree/model', 'N/A').strip('\x00')
-
-        # RAM via /proc/meminfo (no subprocess needed)
-        meminfo = self._read_proc_meminfo()
-        mem_total_mb = meminfo.get('MemTotal', 0) // 1024
-        mem_avail_mb = meminfo.get('MemAvailable', 0) // 1024
-        mem_used_mb  = mem_total_mb - mem_avail_mb
-        mem_pct      = round(mem_used_mb / mem_total_mb * 100, 1) if mem_total_mb > 0 else 0.0
-        swap_total_mb = meminfo.get('SwapTotal', 0) // 1024
-        swap_free_mb  = meminfo.get('SwapFree', 0) // 1024
-        swap_used_mb  = swap_total_mb - swap_free_mb
-        swap_pct      = round(swap_used_mb / swap_total_mb * 100, 1) if swap_total_mb > 0 else 0.0
         ram = f"{mem_used_mb} / {mem_total_mb} MB ({mem_pct:.0f}%)"
-
-        # Per-core CPU via /proc/stat delta
-        curr_cores = self._read_proc_stat_cores()
-        cpu_pcts = []
-        for i in range(4):
-            name = f'cpu{i}'
-            if name in curr_cores and name in self._cpu_prev:
-                d_total = curr_cores[name]['total'] - self._cpu_prev[name]['total']
-                d_idle  = curr_cores[name]['idle']  - self._cpu_prev[name]['idle']
-                pct = round((1.0 - d_idle / d_total) * 100.0, 1) if d_total > 0 else 0.0
-                cpu_pcts.append(max(0.0, min(100.0, pct)))
-            else:
-                cpu_pcts.append(0.0)
-        self._cpu_prev = curr_cores
-
-        import os
         ros_domain = os.environ.get('ROS_DOMAIN_ID', '0')
 
         def _ip_up(ip: str) -> bool:
@@ -640,16 +726,10 @@ class HitosMonitor(Node):
         except Exception:
             pass
 
-        return {
-            'env': env_vars,
-            'ptp_active': ptp_active,
-            'ptp_offsets': ptp_offsets,
-            'metrics': {
-                'cpu_cores': cpu_pcts,
-                'ram':  {'pct': mem_pct,  'used_mb': mem_used_mb,  'total_mb': mem_total_mb},
-                'swap': {'pct': swap_pct, 'used_mb': swap_used_mb, 'total_mb': swap_total_mb},
-            },
-        }
+        result = {'env': env_vars, 'ptp_active': ptp_active, 'ptp_offsets': ptp_offsets}
+        self._sysinfo_cache = result
+        self._sysinfo_cache_time = now
+        return result
 
     def publish_bool_topic(self, group: str, name: str,
                            value: bool = None) -> dict:
@@ -693,6 +773,61 @@ class HitosMonitor(Node):
             return {'success': False, 'message': 'Service call timed out'}
         except Exception as e:
             return {'success': False, 'message': str(e)}
+
+    # ------------------------------------------------------------------
+    # Capture mode (normal <-> calibration)
+    # ------------------------------------------------------------------
+
+    _MODE_ENV = '/tmp/hitos_mode.env'
+
+    def get_capture_mode(self) -> dict:
+        """Read the current capture mode from the shared env file (reboot-safe:
+        absent file => normal mode)."""
+        calib = False
+        visible_hz = 4.0
+        try:
+            with open(self._MODE_ENV) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('HITOS_CALIB='):
+                        calib = line.split('=', 1)[1].strip() == '1'
+                    elif line.startswith('HITOS_CALIB_VISIBLE_HZ='):
+                        try:
+                            visible_hz = float(line.split('=', 1)[1].strip())
+                        except ValueError:
+                            pass
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        return {'calibration': calib, 'visible_hz': visible_hz}
+
+    def set_capture_mode(self, calibration: bool, visible_hz: float = 4.0) -> dict:
+        """Write the mode env file and restart sensors (Ouster azimuth/mode) +
+        cameras (visible rate). hitos_sync follows cameras via PartOf=. Returns a
+        combined result. The ~15-20 s sensor/camera reinit is expected."""
+        try:
+            visible_hz = max(0.5, min(float(visible_hz), 30.0))
+        except (TypeError, ValueError):
+            visible_hz = 4.0
+        try:
+            with open(self._MODE_ENV, 'w') as f:
+                f.write(f'HITOS_CALIB={1 if calibration else 0}\n')
+                f.write(f'HITOS_CALIB_VISIBLE_HZ={visible_hz:g}\n')
+        except Exception as e:
+            return {'success': False, 'message': f'Failed to write mode file: {e}'}
+
+        r1 = self._process_monitor.relaunch('Sensors')
+        r2 = self._process_monitor.relaunch('Multiespectral Cameras')
+        ok = bool(r1.get('success')) and bool(r2.get('success'))
+        mode = 'calibration' if calibration else 'normal'
+        return {
+            'success': ok,
+            'calibration': calibration,
+            'visible_hz': visible_hz,
+            'message': (f'Mode -> {mode} (visible {visible_hz:g} Hz). '
+                        f'Sensors: {r1.get("message")}. Cameras: {r2.get("message")}'),
+        }
 
     def get_full_status(self) -> dict:
         return {

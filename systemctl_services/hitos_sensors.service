@@ -12,11 +12,22 @@ ExecStart=/bin/bash -c "\
     source /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/scripts/hitos_setup.sh && \
     _hitos_export_ip && \
     stty -F $$HITOS_GPS_PORT 9600 -hupcl clocal 2>/dev/null || true && \
+    set -a; [ -f /tmp/hitos_mode.env ] && . /tmp/hitos_mode.env; set +a; \
     ros2 launch hitos_setup sensors.launch.py"
 KillSignal=SIGINT
 TimeoutStopSec=45
 Restart=always
 RestartSec=10
+# Background recovery (scripts/ouster_lifecycle_recover.sh): waits for the
+# Ouster HTTP API, re-drives the driver lifecycle to 'active' if the
+# boot-timing race left it unconfigured (the launch only tries CONFIGURE once
+# and never retries), then saves the applied config to flash so the next start
+# finds staging==active and skips reinitialisation (which would break the PTP
+# lock). Runs detached so service startup is not delayed and After=dependants
+# (cameras, sync) are not blocked waiting for the lidar.
+ExecStartPost=/bin/bash -c '\
+    bash /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/scripts/ouster_lifecycle_recover.sh & \
+    exit 0'
 
 [Install]
 WantedBy=multi-user.target

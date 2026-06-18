@@ -9,17 +9,25 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- topic_hz_monitor + ouster_recal_node (C++) -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+
   <!-- Runtime deps — the packages whose launches we include -->
   <exec_depend>multiespectral_acquire</exec_depend>
   <exec_depend>temperature_driver</exec_depend>
   <exec_depend>ublox_gps</exec_depend>
   <exec_depend>ouster_ros</exec_depend>
 
+  <!-- Sensor model (sensor_model.launch.py) -->
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
   <!-- Web manager deps -->
   <exec_depend>python3-flask</exec_depend>
   <exec_depend>python3-flask-socketio</exec_depend>
   <exec_depend>rclpy</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
 
   <export>

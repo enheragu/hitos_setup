@@ -1,0 +1,285 @@
+<?xml version="1.0"?>
+<!--
+  HITOS sensor rig — frame tree + visuals, SEEDED from the camera-mount CAD
+  (cad/paralel_mount.scad). THIS is the single source of truth for the static TFs; load it
+  with robot_state_publisher (launch/sensor_model.launch.py, included by sensors.launch.py).
+  It replaced the old static_transform_publisher script (now removed).
+
+  Frame tree:
+    base_link
+      ip55_box                       IP55 enclosure (232x182x95 mm) — everything sits on it
+        multiespectral_base          camera-mount bottom-centre (on the box lid)
+          multiespectral_center / multiespectral_top
+            os_sensor                Ouster datum (driver adds os_lidar / os_imu)
+          multiespectral_focal_base
+            visible_camera_frame  -> visible_camera_optical_frame
+            lwir_camera_frame     -> lwir_camera_optical_frame
+        gps_link                     GPS antenna on the lid, beside the mount (TODO X/Y)
+
+  All non-TODO numbers are taken EXACTLY from the CAD and re-derived below:
+    enclosure box (model frame, mm): X[-120,0] Y[-55,55] Z[-30,18.3]
+      mount_translate=[-120,-55,-30], base_dimensions=[120,110,48.3] (mount_z=48.3).
+      bottom-centre [-60,0,-30] = multiespectral_base ; top-centre [-60,0,18.3] = top.
+    cameras: camera() puts each FOCAL point at its own origin ->
+      Basler  [-25, +15.75, 0]  (basler_y_translate = max(29,30.5)/2 + 0.5)
+      FLIR    [-25, -16.80, 0]   (flir_y_translate  = max(29,32.6)/2 + 0.5)
+      focal midpoint [-25, -0.525, 0]; baseline 32.55 mm along Y; optical axis +X.
+    Ouster base (110x110x15) centre at [-55, 0, 25.8]; its bottom rests on the top face
+      (Z=18.3) and its top (sensor-body bottom) is at Z=33.3 = 15 mm above the top face.
+
+  REP-103 axes: X = model +X = forward (cameras' optical axis), Z = model +Z = up,
+  Y = model +Y = toward the Basler. Whether +Y is truly the vehicle's LEFT is what the
+  rviz mesh check verifies. Seed for the lidar-camera calibration, NOT a final extrinsic.
+-->
+<robot name="hitos_sensors" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Materials defined at robot level and referenced by name in each visual. STL carries
+       no colour, so rviz takes it from here; top-level (vs inline) is the reliable form. -->
+  <material name="ip55_white"><color rgba="0.92 0.92 0.92 0.55"/></material>
+  <material name="basler_grey"><color rgba="0.40 0.40 0.45 1"/></material>
+  <material name="flir_grey">  <color rgba="0.30 0.30 0.32 1"/></material>
+  <material name="mount_black"><color rgba="0.12 0.12 0.13 1"/></material>   <!-- 3D-printed bracket -->
+  <material name="ouster_alu"> <color rgba="0.78 0.78 0.80 1"/></material>   <!-- render two-tones the optical band black -->
+  <material name="gps_black">  <color rgba="0.10 0.10 0.10 1"/></material>
+  <material name="temp_green"> <color rgba="0.13 0.45 0.20 1"/></material>   <!-- DHT22 enclosure -->
+  <material name="dht22_white"><color rgba="0.90 0.90 0.90 1"/></material>   <!-- DHT22 sensor -->
+
+
+  <!-- body(X-fwd,Y-left,Z-up) -> optical(Z-fwd,X-right,Y-down). URDF rpy order is
+       (roll,pitch,yaw); here roll=yaw=-pi/2 so it reads the same as the STP yaw,pitch,roll. -->
+  <xacro:property name="optical_rpy" value="-1.5708 0 -1.5708"/>
+
+  <!-- Height of os_sensor above the enclosure top face. The 15 +/- 0.2 mm metal base is
+       part of the Ouster product (its datasheet). UNRESOLVED: does the Ouster os_sensor
+       datum sit at the BOTTOM of that base (bolt-down face) -> 0.0, or at its TOP
+       (sensor-body bottom) -> 0.015 ? Default 0.015 (Enrique's reading: os_sensor does not
+       include the base). Disambiguate on the OS0-128 drawing, OR visually: with the Ouster
+       mesh loaded the driver's os_sensor->os_lidar (+36.18 mm Z) must land the beam plane
+       at the right physical height. -->
+  <xacro:property name="ouster_base_z" value="0.015"/>
+
+  <!-- Yaw of os_sensor on the mount = 0, and that is CORRECT (not a placeholder), pinned by:
+       the cable connector faces the REAR; the Ouster encoder 0 azimuth sits at the connector;
+       os_lidar is 180 deg about Z from os_sensor (lidar_to_sensor_transform). So forward =
+       encoder ~180 deg = the azimuth_window [152000,202000] centre (177 deg) = the cropped FOV
+       that overlaps the cameras  ->  os_sensor +X points forward with yaw 0. Residual: the few-deg
+       fixed offset between the true encoder 0 and the connector, absorbed by a fine calibration. -->
+  <xacro:property name="ouster_yaw" value="0"/>
+
+  <!-- IP55 enclosure (everything mounts on it). Outer dims WITH lid (Enrique): 232 x 182 x 95 mm.
+       The cameras exit a LONG (232 mm) face, so the FRONT is that long face. Box frame: origin =
+       box bottom-centre, X fwd = front, Y left, Z up =>  X(front-back) = 182 ('ancho'),
+       Y(left-right) = 232 ('largo'), Z = 95. front=+91 back=-91 left=+116 right=-116 lid=+95 mm. -->
+  <xacro:property name="box_x" value="0.182"/>
+  <xacro:property name="box_y" value="0.232"/>
+  <xacro:property name="box_z" value="0.095"/>
+  <!-- Camera mount on the lid, cameras facing +X out the front long face (box_to_multi = identity).
+       Left/right are Enrique's (facing the rig from the front), i.e. user-left = REP -Y.
+       front-back (X): enclosure front (model X=0) flush to the FRONT face (+91)
+                       -> multiespectral_base (model X=-60) at +0.031.
+       left-right (Y): mount 55 mm from Enrique's LEFT (-Y) side
+                       -> multiespectral_base at -0.006. (55 + 110 + 67 = 232 mm OK.) -->
+  <xacro:property name="mount_on_box_x" value="0.031"/>
+  <xacro:property name="mount_on_box_y" value="-0.006"/>
+
+  <!-- USB GPS on the lid, back + Enrique's RIGHT (+Y); 4.9 cm side along Y, 3.8 cm along X.
+       7 mm from the BACK face, flush to the RIGHT -> footprint X[-84,-46] Y[+67,+116], centre [-65,+91.5]. -->
+  <xacro:property name="gps_on_box_x" value="-0.065"/>
+  <xacro:property name="gps_on_box_y" value="0.0915"/>
+
+  <!-- ============================ links ============================ -->
+  <link name="base_link"/>
+
+  <!-- IP55 box. Link origin at the box bottom-centre; the <box> visual is centred so its
+       bottom sits at Z=0 (origin z = box_z/2). -->
+  <link name="ip55_box">
+    <visual>
+      <origin xyz="0 0 ${box_z/2}" rpy="0 0 0"/>
+      <geometry><box size="${box_x} ${box_y} ${box_z}"/></geometry>
+      <material name="ip55_white"/>
+    </visual>
+  </link>
+
+  <link name="multiespectral_base"/>
+
+  <!-- structural enclosure references -->
+  <link name="multiespectral_center"/>
+  <link name="multiespectral_top"/>
+  <link name="multiespectral_focal_base"/>
+
+  <!-- Ouster datum (driver hangs os_lidar / os_imu off this from sensor metadata) -->
+  <link name="os_sensor"/>
+
+  <!-- cameras -->
+  <link name="visible_camera_frame">
+    <!-- Basler acA1600-60gc. STL exported at its focal origin (X=optical fwd, Z up,
+         Y centred; bbox X[-58.2,29] Y[+-14.8] Z[+-14.8]) -> attaches with identity. -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hitos_setup/meshes/basler_camera.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="basler_grey"/>
+    </visual>
+  </link>
+  <link name="visible_camera_optical_frame"/>
+
+  <link name="lwir_camera_frame">
+    <!-- FLIR A68. STL exported at its focal origin (X=optical fwd, Z up, Y centred;
+         bbox X[-66.2,0.7] Y[+-15.8] Z[-21.5,15.8] -> focal high on the body) -> identity. -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hitos_setup/meshes/flir_camera.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="flir_grey"/>
+    </visual>
+  </link>
+  <link name="lwir_camera_optical_frame"/>
+
+  <!-- USB GPS body: 4.9 (X) x 3.8 (Y) cm footprint; height nominal 15 mm (unmeasured).
+       gps_link sits on the lid at the footprint centre; box rises +z from there. -->
+  <link name="gps_link">
+    <visual>
+      <origin xyz="0 0 0.0075" rpy="0 0 0"/>
+      <geometry><box size="0.038 0.049 0.015"/></geometry>
+      <material name="gps_black"/>
+    </visual>
+  </link>
+
+  <!-- DHT22 temp/humidity enclosure (sliding-lid box). Outer 29.8 x 42.8 x 65.6 mm derived from
+       the SCAD (elechtronics_size [27,32,62.8] + box_lid walls wall_w*1 in X, wall_w*5 in Y, +tol),
+       5 mm rounded edges. Visual only (no calibration frame needed for this sensor). -->
+  <link name="temp_box">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://hitos_setup/meshes/nodemcu_dht22_box.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="temp_green"/>
+    </visual>
+  </link>
+  <link name="dht22">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://hitos_setup/meshes/dht22.stl" scale="0.001 0.001 0.001"/></geometry>
+      <material name="dht22_white"/>
+    </visual>
+  </link>
+
+  <!-- the camera-mount bracket (cameras NOT included in this mesh; they are separate above).
+       Authored in the CAD MODEL frame (bbox X[-120,0] Y[+-55] Z[-38.5,17.8]); multiespectral_base
+       sits at model [-60,0,-30], so the model origin is at [+60,0,+30] mm in this link. -->
+  <link name="mount_visual">
+    <visual>
+      <origin xyz="0.060 0 0.030" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://hitos_setup/meshes/camera_pair_paralel_v2.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="mount_black"/>
+    </visual>
+  </link>
+
+  <!-- Ouster OS0-128U exterior. STL converted from cad/700-108702 ... OS0 XX ... .STEP
+       (the generic OS0 exterior; mounting/housing identical to the BH variant). The STEP's
+       own datum/orientation is unknown here, so this visual origin is a STARTING GUESS to
+       align in rviz; it does NOT affect the TF tree. -->
+  <link name="ouster_visual">
+    <!-- ouster_exterior.stl = the OS1 exterior (noFOV) from the CAD; same housing as the OS0-128,
+         no FOV cone, ~169k tris (cleaner than the old os0 STL). Cylinder axis along its native +Y
+         (bbox X/Z +-55, Y[-22.5,73.5]), so rotate +90 deg about X to stand it up along os_sensor +Z.
+         Z seating is a guess — fine-tune in rviz. Visual only. -->
+    <visual>
+      <!-- +0.0075 Z so the mesh bottom (native Y=-22.5 mm) lands on the enclosure top: the
+           15 mm Ouster base then fills from there up to os_sensor. Otherwise it sinks in.
+           Yaw +pi/2 turns the cable connector to the BACK (-X), so the sensor "front" faces
+           forward like the cameras. (os_sensor's own yaw stays a TODO for calibration.) -->
+      <origin xyz="0 0 0.0075" rpy="1.5708 0 1.5708"/>
+      <geometry>
+        <mesh filename="package://hitos_setup/meshes/ouster_exterior.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="ouster_alu"/>
+    </visual>
+  </link>
+
+  <!-- ============================ joints (all fixed) ============================ -->
+  <!-- pose of the IP55 box on the vehicle: TODO measure -->
+  <joint name="base_to_box" type="fixed">
+    <parent link="base_link"/><child link="ip55_box"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <!-- camera mount on the box LID. Z = box_z (lid top). X/Y: see mount_on_box_* above —
+       X is a best guess from the 52-167 mm footprint and is NOT yet reconciled with
+       "lenses flush with the front face"; confirm the measurement reference. -->
+  <joint name="box_to_multi" type="fixed">
+    <!-- +0.0085 (mount mesh extends 8.5 mm below multiespectral_base, model Z=-30, to its
+         resting face model Z=-38.5) + 0.002 velcro pad under the mount. -->
+    <parent link="ip55_box"/><child link="multiespectral_base"/>
+    <origin xyz="${mount_on_box_x} ${mount_on_box_y} ${box_z + 0.0105}" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="multi_to_center" type="fixed">
+    <parent link="multiespectral_base"/><child link="multiespectral_center"/>
+    <origin xyz="0 0 0.02415" rpy="0 0 0"/>
+  </joint>
+  <joint name="multi_to_top" type="fixed">
+    <parent link="multiespectral_base"/><child link="multiespectral_top"/>
+    <origin xyz="0 0 0.0483" rpy="0 0 0"/>
+  </joint>
+  <joint name="multi_to_focal" type="fixed">
+    <parent link="multiespectral_base"/><child link="multiespectral_focal_base"/>
+    <origin xyz="0.035 -0.000525 0.030" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Ouster: child of the top face. +5 mm X = base centre (-55) vs enclosure centre (-60). -->
+  <joint name="top_to_ouster" type="fixed">
+    <parent link="multiespectral_top"/><child link="os_sensor"/>
+    <origin xyz="0.005 0 ${ouster_base_z}" rpy="0 0 ${ouster_yaw}"/>
+  </joint>
+
+  <joint name="focal_to_visible" type="fixed">
+    <parent link="multiespectral_focal_base"/><child link="visible_camera_frame"/>
+    <origin xyz="0 0.016275 0" rpy="0 0 0"/>
+  </joint>
+  <joint name="focal_to_lwir" type="fixed">
+    <parent link="multiespectral_focal_base"/><child link="lwir_camera_frame"/>
+    <origin xyz="0 -0.016275 0" rpy="0 0 0"/>
+  </joint>
+  <joint name="visible_to_optical" type="fixed">
+    <parent link="visible_camera_frame"/><child link="visible_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="${optical_rpy}"/>
+  </joint>
+  <joint name="lwir_to_optical" type="fixed">
+    <parent link="lwir_camera_frame"/><child link="lwir_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="${optical_rpy}"/>
+  </joint>
+
+  <!-- GPS on the box lid, back-right (see gps_on_box_* above). Z = box_z (lid top). -->
+  <joint name="box_to_gps" type="fixed">
+    <parent link="ip55_box"/><child link="gps_link"/>
+    <origin xyz="${gps_on_box_x} ${gps_on_box_y} ${box_z + 0.002}" rpy="0 0 0"/>   <!-- +2mm velcro -->
+  </joint>
+
+  <!-- temp/humidity box LYING on its large face (native X=29.8 -> up), spun 180 deg about Z
+       (yaw +pi/2 vs -pi/2) per Enrique; translation recomputed so the footprint stays put
+       (mesh origin is a corner): world bbox X[28.2,71] Y[50.4,116] Z[95,124.8] mm — flush RIGHT,
+       20 mm from the FRONT face, beside the mount. Visual only. -->
+  <joint name="box_to_temp" type="fixed">
+    <parent link="ip55_box"/><child link="temp_box"/>
+    <origin xyz="0.0676 0.116 ${box_z + 0.002}" rpy="0 -1.5708 1.5708"/>   <!-- +2mm velcro -->
+  </joint>
+  <!-- DHT22 sensor on the box, from the enclosure SCAD: translate([35,18,31.4]) rotate([0,-180,90]). -->
+  <joint name="temp_to_dht22" type="fixed">
+    <parent link="temp_box"/><child link="dht22"/>
+    <origin xyz="0.035 0.018 0.0314" rpy="0 -3.14159 1.5708"/>
+  </joint>
+
+  <!-- visual-only links: attach the bracket to the base and the Ouster shell to os_sensor -->
+  <joint name="mount_visual_joint" type="fixed">
+    <parent link="multiespectral_base"/><child link="mount_visual"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <joint name="ouster_visual_joint" type="fixed">
+    <parent link="os_sensor"/><child link="ouster_visual"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+</robot>

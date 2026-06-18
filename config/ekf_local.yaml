@@ -13,7 +13,9 @@
     # Linear acceleration is disabled: without wheel odometry there is nothing
     # to bound the double-integration drift, so ax/ay cause runaway position.
     # Gyro (vyaw) provides heading rate; GPS provides absolute position via ekf_global.
-    imu0: /ouster/imu
+    # imu_recal: Ouster IMU restamped to wall-clock by ouster_recal_node (sensor runs
+    # TIME_FROM_INTERNAL_OSC since PTP won't lock; raw stamps are uptime → EKF rejects).
+    imu0: /ouster/imu_recal
     imu0_config: [false, false, false,  # x, y, z
                   false, false, false,  # roll, pitch, yaw
                   false, false, false,  # vx, vy, vz

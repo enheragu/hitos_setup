@@ -35,6 +35,11 @@ app = Flask(__name__,
             template_folder=os.path.join(_web_dir, 'templates'),
             static_folder=os.path.join(_web_dir, 'static'))
 app.json.sort_keys = False
+# Cache CSS/JS for an hour. Flask's default (Cache-Control: no-cache) revalidates
+# every asset on every load; over a relayed Husarnet link that round-trip can drop
+# → unstyled page. With a max-age, one good load keeps it styled. Hard-refresh
+# (Ctrl+Shift+R) bypasses it when editing assets.
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 3600
 
 _monitor: 'HitosMonitor | None' = None
 
@@ -110,6 +115,24 @@ def api_toggle(group, name):
 @app.route('/api/guis')
 def api_guis():
     return jsonify(GUI_LINKS)
+
+
+@app.route('/api/mode')
+def api_mode_get():
+    if _monitor is None:
+        return jsonify({'error': 'Monitor not initialized'}), 503
+    return jsonify(_monitor.get_capture_mode())
+
+
+@app.route('/api/mode/calibration', methods=['POST'])
+def api_mode_set():
+    if _monitor is None:
+        return jsonify({'error': 'Monitor not initialized'}), 503
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', False))
+    visible_hz = data.get('visible_hz', 4.0)
+    result = _monitor.set_capture_mode(enabled, visible_hz)
+    return jsonify(result), 200 if result.get('success') else 500
 
 
 @app.route('/api/system/shutdown', methods=['POST'])

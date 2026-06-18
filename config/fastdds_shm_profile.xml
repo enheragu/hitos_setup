@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  TEMPORARILY INERT (2026-06-17, end of day) — set to builtin transports so the
+  SHM-wired processes (os_driver, cameras, compositor) fall back to the default
+  transport = the validated-stable config, for a clean overnight shutdown.
+
+  The SHM rollout deployed but the large data still flowed over UDP (the 32 MB
+  segments were created yet not used for delivery) — needs debugging. All launch
+  wiring is kept in place.
+
+  TO RE-ENABLE SHM, replace the <profiles> body below with the real profile
+  (segment_size 33554432 SHM + UDPv4 transports, userTransports listing both,
+  useBuiltinTransports=false, is_default_profile=true) — full content + the
+  open debug question are recorded in memory: project_shm_rollout.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <participant profile_name="hitos_shm" is_default_profile="true">
+      <rtps>
+        <useBuiltinTransports>true</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

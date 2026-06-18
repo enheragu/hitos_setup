@@ -188,9 +188,10 @@ document.addEventListener('click', e => {
     if (e.target.id === 'log-modal') closeLogModal();
     if (e.target.id === 'shutdown-modal') closeShutdownModal();
     if (e.target.id === 'sparkline-modal') closeSparklineModal();
+    if (e.target.id === 'calib-modal') closeCalibModal();
 });
 document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { closeLogModal(); closeShutdownModal(); closeSparklineModal(); }
+    if (e.key === 'Escape') { closeLogModal(); closeShutdownModal(); closeSparklineModal(); closeCalibModal(); }
 });
 
 // ── Shutdown ──────────────────────────────────────────────────────────────────
@@ -223,6 +224,41 @@ async function confirmShutdown() {
         setConnectionStatus(false);
         showToast('Shutting down...', 'info');
     }
+}
+
+// ── Capture mode (normal / calibration) ───────────────────────────────────────
+
+async function showCalibModal() {
+    document.getElementById('calib-modal').classList.add('show');
+    const cur = document.getElementById('calib-current');
+    cur.textContent = '…';
+    try {
+        const resp = await fetchWithTimeout(`${CONFIG.apiBase}/mode`);
+        const m = await resp.json();
+        cur.textContent = m.calibration
+            ? `Calibration (visible ${m.visible_hz} Hz)` : 'Normal';
+        if (m.visible_hz) document.getElementById('calib-hz').value = m.visible_hz;
+    } catch { cur.textContent = 'unknown'; }
+}
+
+function closeCalibModal() {
+    const el = document.getElementById('calib-modal');
+    if (el) el.classList.remove('show');
+}
+
+async function applyCalibMode(enabled) {
+    const hz = parseFloat(document.getElementById('calib-hz').value) || 4;
+    closeCalibModal();
+    showToast(enabled ? 'Activating calibration mode… (restarting sensors + cameras)'
+                      : 'Returning to normal mode… (restarting sensors + cameras)', 'info');
+    try {
+        const resp = await fetchWithTimeout(`${CONFIG.apiBase}/mode/calibration`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ enabled, visible_hz: hz }) }, 60000);
+        const result = await resp.json();
+        showToast(result.message || (result.success ? 'Mode changed' : 'Failed'),
+                  result.success ? 'success' : 'error');
+    } catch { showToast('Error changing mode', 'error'); }
 }
 
 // ── Render: Processes ────────────────────────────────────────────────────────
