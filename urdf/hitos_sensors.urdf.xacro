@@ -35,7 +35,7 @@
 
   <!-- Materials defined at robot level and referenced by name in each visual. STL carries
        no colour, so rviz takes it from here; top-level (vs inline) is the reliable form. -->
-  <material name="ip55_white"><color rgba="0.92 0.92 0.92 0.55"/></material>
+  <material name="ip55_white"><color rgba="0.72 0.72 0.74 1"/></material>   <!-- actually GREY (RAL7035) — real box is a Famatel-style grey IP55, not white -->
   <material name="basler_grey"><color rgba="0.40 0.40 0.45 1"/></material>
   <material name="flir_grey">  <color rgba="0.30 0.30 0.32 1"/></material>
   <material name="mount_black"><color rgba="0.12 0.12 0.13 1"/></material>   <!-- 3D-printed bracket -->
@@ -43,6 +43,7 @@
   <material name="gps_black">  <color rgba="0.10 0.10 0.10 1"/></material>
   <material name="temp_green"> <color rgba="0.13 0.45 0.20 1"/></material>   <!-- DHT22 enclosure -->
   <material name="dht22_white"><color rgba="0.90 0.90 0.90 1"/></material>   <!-- DHT22 sensor -->
+  <material name="standoff_steel"><color rgba="0.55 0.55 0.58 1"/></material> <!-- Ouster ventilation nuts -->
 
 
   <!-- body(X-fwd,Y-left,Z-up) -> optical(Z-fwd,X-right,Y-down). URDF rpy order is
@@ -57,6 +58,13 @@
        mesh loaded the driver's os_sensor->os_lidar (+36.18 mm Z) must land the beam plane
        at the right physical height. -->
   <xacro:property name="ouster_base_z" value="0.015"/>
+
+  <!-- Extra standoff under the Ouster: 8 mm of nuts/spacers lifting it off the mount surface
+       to leave a ventilation air gap (mirrors the Husky payload layout). Kept SEPARATE from
+       the sensor's own 15 mm product base (ouster_base_z) so the two stay legible; the total
+       height of os_sensor above the top face = ouster_base_z + this. The ouster_visual mesh
+       hangs off os_sensor, so it rises with the datum and the 8 mm gap shows up by itself. -->
+  <xacro:property name="ouster_standoff_z" value="0.008"/>
 
   <!-- Yaw of os_sensor on the mount = 0, and that is CORRECT (not a placeholder), pinned by:
        the cable connector faces the REAR; the Ouster encoder 0 azimuth sits at the connector;
@@ -112,12 +120,14 @@
 
   <!-- cameras -->
   <link name="visible_camera_frame">
-    <!-- Basler acA1600-60gc. STL exported at its focal origin (X=optical fwd, Z up,
-         Y centred; bbox X[-58.2,29] Y[+-14.8] Z[+-14.8]) -> attaches with identity. -->
+    <!-- Basler acA1600-60gc — manufacturer CAD (Basler ace GigE C-mount STEP -> STL, 89k tris,
+         body 29x29x60.3 mm). The CAD optical axis is its +Z; lens/C-mount end at mesh Z=0
+         (confirmed by geometry: that face is the circular C-mount ring). Rotate pitch -90 deg so
+         the lens points +X (forward), body extends -X; scale mm->m. Visual only (no TF impact). -->
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <origin xyz="0 0 0" rpy="0 -1.5708 0"/>
       <geometry>
-        <mesh filename="package://hitos_setup/meshes/basler_camera.stl" scale="0.001 0.001 0.001"/>
+        <mesh filename="package://hitos_setup/meshes/basler_ace_gige_real.stl" scale="0.001 0.001 0.001"/>
       </geometry>
       <material name="basler_grey"/>
     </visual>
@@ -200,6 +210,18 @@
     </visual>
   </link>
 
+  <!-- Four ventilation standoffs (M8 nuts/spacers) under the Ouster base, one per mounting
+       hole, each spanning the 8 mm air gap (top face Z=0 up to the base bottom Z=0.008).
+       VISUAL ONLY — does not affect the TF tree. Hole XY are APPROXIMATE: a +/-40 mm square
+       about the Ouster base centre (top-frame X=+0.005, Y=0), from earlier CAD notes; the
+       source SCAD is no longer in the repo, so confirm/nudge these against the render. -->
+  <link name="ouster_standoffs">
+    <visual><origin xyz="0.045  0.040 0.004" rpy="0 0 0"/><geometry><cylinder radius="0.006" length="0.008"/></geometry><material name="standoff_steel"/></visual>
+    <visual><origin xyz="0.045 -0.040 0.004" rpy="0 0 0"/><geometry><cylinder radius="0.006" length="0.008"/></geometry><material name="standoff_steel"/></visual>
+    <visual><origin xyz="-0.035  0.040 0.004" rpy="0 0 0"/><geometry><cylinder radius="0.006" length="0.008"/></geometry><material name="standoff_steel"/></visual>
+    <visual><origin xyz="-0.035 -0.040 0.004" rpy="0 0 0"/><geometry><cylinder radius="0.006" length="0.008"/></geometry><material name="standoff_steel"/></visual>
+  </link>
+
   <!-- ============================ joints (all fixed) ============================ -->
   <!-- pose of the IP55 box on the vehicle: TODO measure -->
   <joint name="base_to_box" type="fixed">
@@ -229,10 +251,11 @@
     <origin xyz="0.035 -0.000525 0.030" rpy="0 0 0"/>
   </joint>
 
-  <!-- Ouster: child of the top face. +5 mm X = base centre (-55) vs enclosure centre (-60). -->
+  <!-- Ouster: child of the top face. +5 mm X = base centre (-55) vs enclosure centre (-60).
+       Z = 15 mm product base + 8 mm ventilation standoff (nuts) = 23 mm above the top face. -->
   <joint name="top_to_ouster" type="fixed">
     <parent link="multiespectral_top"/><child link="os_sensor"/>
-    <origin xyz="0.005 0 ${ouster_base_z}" rpy="0 0 ${ouster_yaw}"/>
+    <origin xyz="0.005 0 ${ouster_base_z + ouster_standoff_z}" rpy="0 0 ${ouster_yaw}"/>
   </joint>
 
   <joint name="focal_to_visible" type="fixed">
@@ -279,6 +302,11 @@
   </joint>
   <joint name="ouster_visual_joint" type="fixed">
     <parent link="os_sensor"/><child link="ouster_visual"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <!-- standoffs sit on the enclosure top face (under the raised Ouster base) -->
+  <joint name="ouster_standoffs_joint" type="fixed">
+    <parent link="multiespectral_top"/><child link="ouster_standoffs"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </joint>
 

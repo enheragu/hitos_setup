@@ -61,6 +61,112 @@ def box_tris(size):
     f = [(0,1,3),(0,3,2),(4,6,7),(4,7,5),(0,4,5),(0,5,1),(2,3,7),(2,7,6),(0,2,6),(0,6,4),(1,5,7),(1,7,3)]
     return np.array([[c[i] for i in t] for t in f], float)
 
+def cylinder_tris(radius, length, n=20):  # URDF <cylinder>: axis +Z, centred at origin
+    z0, z1 = -length/2, length/2
+    ring = [[radius*np.cos(a), radius*np.sin(a)] for a in np.linspace(0, 2*np.pi, n, endpoint=False)]
+    T = []
+    for i in range(n):
+        j = (i+1) % n; p, q = ring[i], ring[j]
+        T += [[[p[0],p[1],z0],[q[0],q[1],z0],[q[0],q[1],z1]], [[p[0],p[1],z0],[q[0],q[1],z1],[p[0],p[1],z1]],
+              [[0,0,z0],[q[0],q[1],z0],[p[0],p[1],z0]], [[0,0,z1],[p[0],p[1],z1],[q[0],q[1],z1]]]
+    return np.array(T, float)
+
+def frustum(p0, p1, r0, r1, n=22, caps=True):   # tapered cylinder (cone if r1!=r0) between two pts
+    p0 = np.array(p0, float); p1 = np.array(p1, float); ax = p1 - p0; ax = ax/np.linalg.norm(ax)
+    ref = np.array([1., 0, 0]) if abs(ax[0]) < 0.9 else np.array([0, 1., 0])
+    u = np.cross(ax, ref); u /= np.linalg.norm(u); v = np.cross(ax, u)
+    R0 = [p0 + r0*(np.cos(t)*u + np.sin(t)*v) for t in np.linspace(0, 2*np.pi, n, endpoint=False)]
+    R1 = [p1 + r1*(np.cos(t)*u + np.sin(t)*v) for t in np.linspace(0, 2*np.pi, n, endpoint=False)]
+    T = []
+    for i in range(n):
+        j = (i+1) % n
+        T += [[R0[i], R0[j], R1[j]], [R0[i], R1[j], R1[i]]]
+        if caps: T += [[p0, R0[j], R0[i]], [p1, R1[i], R1[j]]]
+    return np.array(T, float)
+
+# Ricoh FL-CC1614-2M on the visible camera: barrel O29.5 x 33.2 mm + C-mount base + dark AR front
+# element. Built in the visible_camera_frame (optical axis +X), in metres.
+LENS_GREY = (0.20, 0.20, 0.22, 1); LENS_GLASS = (0.06, 0.09, 0.16, 1)
+def lens_segments():
+    return [
+        (frustum([0, 0, 0],      [0.004, 0, 0],  0.0127,  0.0127),  LENS_GREY),    # C-mount base O25.4
+        (frustum([0.004, 0, 0],  [0.030, 0, 0],  0.01475, 0.01475), LENS_GREY),    # barrel O29.5
+        (frustum([0.030, 0, 0],  [0.0332, 0, 0], 0.01475, 0.01475), LENS_GREY),    # filter rim O29.5
+        (frustum([0.0312, 0, 0], [0.0332, 0, 0], 0.0118,  0.0118),  LENS_GLASS),   # recessed front glass
+    ]
+
+# FLIR A68 (20 deg, integrated optics): gold germanium LWIR element + dark bezel. lwir_camera_frame, +X.
+FLIR_BEZEL = (0.10, 0.10, 0.11, 1); FLIR_GE = (0.60, 0.46, 0.18, 1)
+def flir_lens_segments():
+    return [
+        (frustum([0, 0, 0], [0.004, 0, 0],  0.013, 0.013), FLIR_BEZEL),   # bezel ring O26
+        (frustum([0, 0, 0], [0.0055, 0, 0], 0.010, 0.010), FLIR_GE),      # germanium element O20 (slightly proud)
+    ]
+
+# Famatel 3012 "caja estanca IP55 con conos" — fully procedural box (replaces the plain URDF box
+# visual in the render): inset base body + 10 domed conical cable entries + a faithful lid
+# (overhanging slab, 4 countersunk corner screw bosses, IP55/IEC/logo embossing) + 2 mounting ears.
+# Built in the ip55_box frame (origin=box bottom-centre, total height 0.095). Lid+ears authored by
+# the lid-design multi-agent workflow against the real product photo. Dims 232x182x95 are FIXED.
+def _cone_entry(c, nout, base_r=0.017, h=0.012, steps=5):   # large DOMED entry w/ concentric ring ridges
+    c = np.array(c, float); nout = np.array(nout, float)/np.linalg.norm(nout); seg = h/steps
+    return [frustum(c + nout*seg*k, c + nout*seg*(k+1),
+                    base_r*(1-(k/steps)**2)**0.5, base_r*(1-(k/steps)**2)**0.5)
+            for k in range(steps)]
+def box_vents():     # 10 conos, TWO sizes. front/back: outer two LARGE + centre small. laterals: one LARGE + one small.
+    z = 0.040; bx = 0.089; by = 0.114; SM = 0.018; LG = 0.024; out = []
+    for nx in (1, -1):                         # front (+X) & back (-X): 3 each, pulled in (margin to edge + between)
+        out += _cone_entry([nx*bx,  0.062, z], [nx, 0, 0], base_r=LG)
+        out += _cone_entry([nx*bx,  0.000, z], [nx, 0, 0], base_r=SM)
+        out += _cone_entry([nx*bx, -0.062, z], [nx, 0, 0], base_r=LG)
+    for ny in (1, -1):                         # laterals (+-Y): big + small, pulled toward centre (margin to edge)
+        out += _cone_entry([-0.032, ny*by, z], [0, ny, 0], base_r=LG)
+        out += _cone_entry([ 0.036, ny*by, z], [0, ny, 0], base_r=SM)
+    return out
+def box_body():      # inset base body 0..0.075 (the thick lid overhangs it -> visible seam/lip)
+    body = rounded_box([0.178, 0.228, 0.075], 0.011); body[:, :, 2] += 0.0375
+    return [(body, (0.72, 0.72, 0.74, 1))]
+
+def _shift(tris, dx=0.0, dy=0.0, dz=0.0):
+    return np.asarray(tris, float) + np.array([dx, dy, dz])
+def _rounded_tab(length, width, thick, r, nc=6):     # flat tab, outer end rounded, inner squared at X=0
+    hw = width / 2.0; rr = min(r, hw)
+    pts = [[0.0, hw], [0.0, -hw], [-(length - rr), -hw]]
+    for t in np.linspace(-90, 90, nc):
+        a = np.radians(t); pts.append([-(length - rr) - rr * np.cos(a), -rr * np.sin(a)])
+    pts.append([-(length - rr), hw])
+    pts = np.array(pts, float); n = len(pts); z0, z1 = -thick / 2, thick / 2; cx = -length / 2.0
+    T = []
+    for i in range(n):
+        j = (i + 1) % n; p, q = pts[i], pts[j]
+        T += [[[p[0],p[1],z0],[q[0],q[1],z0],[q[0],q[1],z1]], [[p[0],p[1],z0],[q[0],q[1],z1],[p[0],p[1],z1]],
+              [[cx,0,z0],[q[0],q[1],z0],[p[0],p[1],z0]], [[cx,0,z1],[p[0],p[1],z1],[q[0],q[1],z1]]]
+    return np.array(T, float)
+def box_lid():       # SIMPLE thick lid: one overhang slab + 4 plain corner screws (just reads as "a lid")
+    GREY_LID2 = (0.745, 0.745, 0.765, 1)
+    z_bot = 0.075; h = 0.020                                                  # thick lid: 0.075..0.095
+    lid = rounded_box([0.182, 0.232, h], 0.014); lid[:, :, 2] += z_bot + h / 2
+    parts = [(lid, GREY_LID2)]
+    z_surf = z_bot + h                                                        # 0.095 top face
+    for sx in (-1, 1):                                                        # 4 plain recessed corner screws
+        for sy in (-1, 1):
+            scr = cylinder_tris(0.0055, 0.0020, n=28) + np.array([sx*0.081, sy*0.106, z_surf - 0.0008])
+            parts.append((scr, (0.40, 0.40, 0.43, 1)))
+    return parts
+def box_ears():      # 2 flat mounting tabs at diagonal corners, each with a through-hole
+    parts = []; EAR = (0.76, 0.76, 0.78, 1); HOLE = (0.34, 0.34, 0.37, 1)
+    length = 0.019; width = 0.020; thick = 0.0050; body_x = 0.089; z_mid = 0.070
+    def tab(sign_x, y):
+        t = _rounded_tab(length, width, thick, r=width / 2 * 0.9)
+        if sign_x > 0:
+            t = t.copy(); t[:, :, 0] = -t[:, :, 0]
+        t = _shift(t, sign_x * body_x, y, z_mid)
+        hole_x = sign_x * (body_x + length - width / 2 * 0.85)
+        hole = cylinder_tris(0.0042, thick + 0.0010, n=22); hole = _shift(hole, hole_x, y, z_mid)
+        return [(t, EAR), (hole, HOLE)]
+    parts += tab(+1, 0.072); parts += tab(-1, -0.072)
+    return parts
+
 def dome_tris(rx, ry, h, n=44, m=12):    # half-ellipsoid: base ellipse (rx,ry) at z=0, apex at z=h
     def P(phi, th):
         return [rx*np.cos(phi)*np.cos(th), ry*np.cos(phi)*np.sin(th), h*np.sin(phi)]
@@ -146,16 +252,39 @@ for link in dom.getElementsByTagName('link'):
         if g.getElementsByTagName('mesh'):
             me = g.getElementsByTagName('mesh')[0]; sc = vec(me.getAttribute('scale'), (1,1,1))[0]
             stls.append((resolve(me.getAttribute('filename')), Tv @ np.diag([sc, sc, sc, 1.0]), col))
+            continue
+        if g.getElementsByTagName('cylinder'):     # e.g. the Ouster ventilation standoffs
+            cy = g.getElementsByTagName('cylinder')[0]
+            tris, Tg = cylinder_tris(float(cy.getAttribute('radius')), float(cy.getAttribute('length'))), Tv
         else:
             size = vec(g.getElementsByTagName('box')[0].getAttribute('size'))
             if name == 'gps_link':            # draw VK-162 domed puck + cable (not the URDF box)
                 tris, Tg = gps_shape_local(), world[name]
             elif name == 'ip55_box':
-                tris, Tg = rounded_box(size, 0.012), Tv
+                continue                       # box is drawn procedurally below (Famatel-style)
             else:
                 tris, Tg = box_tris(size), Tv
-            tw = ((Tg[:3, :3] @ tris.reshape(-1, 3).T).T + Tg[:3, 3]).reshape(tris.shape)
-            boxprim.append((tw, col, name))
+        tw = ((Tg[:3, :3] @ tris.reshape(-1, 3).T).T + Tg[:3, 3]).reshape(tris.shape)
+        boxprim.append((tw, col, name))
+
+# procedural cosmetics: Ricoh lens on the visible camera + the 10 IP55 vent cones
+def _place(W, tris):
+    return ((W[:3, :3] @ tris.reshape(-1, 3).T).T + W[:3, 3]).reshape(tris.shape)
+if 'visible_camera_frame' in world:
+    for seg, col in lens_segments():
+        boxprim.append((_place(world['visible_camera_frame'], seg), col, 'lens_visible'))
+if 'lwir_camera_frame' in world:
+    for seg, col in flir_lens_segments():
+        boxprim.append((_place(world['lwir_camera_frame'], seg), col, 'lens_flir'))
+if 'ip55_box' in world:
+    Wb = world['ip55_box']
+    for seg, col in box_body():
+        boxprim.append((_place(Wb, seg), col, 'box_body'))
+    for seg in box_vents():
+        boxprim.append((_place(Wb, seg), (0.80, 0.80, 0.82, 1), 'box_vent'))
+    for seg, col in box_lid():
+        boxprim.append((_place(Wb, seg), col, 'box_lid'))
+    # mounting ears removed (Enrique: "lengüeta con agujero perdida" — not wanted)
 
 # ---- actor builders ----
 def stl_actor(path, M, col, op):
@@ -252,7 +381,7 @@ def _fov_frame(fov_len):
     a = np.vstack(pts)
     return (a.max(0)+a.min(0))/2, (a.max(0)-a.min(0)).max()/2
 
-def render(name, mesh_op, box_op, gps_op, frames=False, fov=False, fov_len=0.7):
+def render(name, mesh_op, box_op, gps_op, frames=False, fov=False, fov_len=0.7, viewdir=None):
     ren = vtk.vtkRenderer(); ren.SetBackground(1, 1, 1)
     if mesh_op > 0:
         for path, M, col in stls:
@@ -261,10 +390,10 @@ def render(name, mesh_op, box_op, gps_op, frames=False, fov=False, fov_len=0.7):
                     ren.AddActor(a)
             else:
                 ren.AddActor(stl_actor(path, M, col, mesh_op))
-    for tw, col, nm in boxprim:               # box solid/translucent/absent per box_op; gps per gps_op
-        op = box_op if nm == 'ip55_box' else gps_op
+    for tw, col, nm in boxprim:               # lens follows mesh_op; box+vents box_op; gps gps_op
+        op = mesh_op if nm.startswith('lens') else (gps_op if nm == 'gps_link' else box_op)
         if op > 0:
-            ren.AddActor(poly_actor(tw, (0.93, 0.93, 0.95) if nm == 'ip55_box' else col, op))
+            ren.AddActor(poly_actor(tw, col, op))
     if frames:
         for f, lab in FRAMES.items():
             if f in world:
@@ -283,7 +412,7 @@ def render(name, mesh_op, box_op, gps_op, frames=False, fov=False, fov_len=0.7):
         ren.SetUseDepthPeeling(1); ren.SetMaximumNumberOfPeels(6); ren.SetOcclusionRatio(0.05)
     center, scale = (_fov_frame(fov_len)[0], _fov_frame(fov_len)[1]*1.12) if fov else (RIG_C, RIG_R*1.45)
     cam = ren.GetActiveCamera(); cam.ParallelProjectionOn()
-    d = VIEWDIR/np.linalg.norm(VIEWDIR)
+    d = np.array(viewdir, float) if viewdir is not None else VIEWDIR; d = d/np.linalg.norm(d)
     cam.SetFocalPoint(*center); cam.SetPosition(*(center + d*3.0)); cam.SetViewUp(0, 0, 1)
     cam.SetParallelScale(scale); cam.SetClippingRange(1.0, 6.0)
     rw.Render()
@@ -296,6 +425,10 @@ def render(name, mesh_op, box_op, gps_op, frames=False, fov=False, fov_len=0.7):
 render('sensor_solid.png', 1.0, 1.0, 1.0)
 render('sensor_translucent_frames.png', 0.32, 0.16, 0.55, frames=True)
 render('sensor_frames_only.png', 0.0, 0.0, 0.0, frames=True)
+# 100% frontal view (camera at +X looking back -X): lens faces, Ouster, standoff air gap
+render('sensor_front_solid.png', 1.0, 1.0, 1.0, viewdir=[1, 0, 0])
+render('sensor_front_translucent_frames.png', 0.32, 0.16, 0.55, frames=True, viewdir=[1, 0, 0])
+render('sensor_front_frames_only.png', 0.0, 0.0, 0.0, frames=True, viewdir=[1, 0, 0])
 # same three ideas, with the FOV frustums
 render('sensor_fov_solid.png', 1.0, 1.0, 1.0, fov=True)
 render('sensor_fov_translucent_frames.png', 0.28, 0.14, 0.5, frames=True, fov=True)

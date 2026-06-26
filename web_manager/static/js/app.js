@@ -247,7 +247,7 @@ function closeCalibModal() {
 }
 
 async function applyCalibMode(enabled) {
-    const hz = parseFloat(document.getElementById('calib-hz').value) || 4;
+    const hz = parseFloat(document.getElementById('calib-hz').value) || 1;
     closeCalibModal();
     showToast(enabled ? 'Activating calibration mode… (restarting sensors + cameras)'
                       : 'Returning to normal mode… (restarting sensors + cameras)', 'info');

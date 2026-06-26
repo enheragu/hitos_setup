@@ -10,7 +10,12 @@ User=arvc
 # The session folder is generated here and shared with hitos_sync.service via
 # /tmp/hitos_session.env so cameras and buffer compositor use the SAME dataset
 # session. hitos_sync has PartOf=hitos_cameras.service: restarting the cameras
-# (new session) automatically restarts the sync side too.
+# (new session) automatically restarts the sync side too. The session timestamp
+# is generated in ExecStartPre (BEFORE the unit goes active) so hitos_sync, which
+# is ordered After= this unit, always reads the fresh value. Fixes the race where
+# sync read /tmp/hitos_session.env before ExecStart had written it (sync landed a
+# session behind, e.g. data in mult_test_session / a stale calib_<date>).
+ExecStartPre=/bin/bash -c "echo HITOS_SESSION=$(date +'%%d-%%m-%%Y_%%Hh%%Mm') > /tmp/hitos_session.env"
 ExecStart=/bin/bash -c "\
     source /home/arvc/ros2_ws/install/setup.bash && \
     source /home/arvc/ros2_ws/install/hitos_setup/share/hitos_setup/scripts/hitos_setup.sh && \
@@ -18,8 +23,7 @@ ExecStart=/bin/bash -c "\
     export SPINNAKER_GENTL64_CTI=/opt/spinnaker/lib/spinnaker-gentl/Spinnaker_GenTL.cti && \
     HITOS_CALIB=0; HITOS_CALIB_VISIBLE_HZ=4; [ -f /tmp/hitos_mode.env ] && . /tmp/hitos_mode.env; \
     RATE=1; [ $HITOS_CALIB = 1 ] && RATE=$HITOS_CALIB_VISIBLE_HZ; \
-    SESSION=$(date +'%%d-%%m-%%Y_%%Hh%%Mm'); \
-    echo HITOS_SESSION=$SESSION > /tmp/hitos_session.env; \
+    . /tmp/hitos_session.env; SESSION=$HITOS_SESSION; \
     ros2 launch multiespectral_acquire cameras_only.launch.py \
         session_folder:=$SESSION output_frame_rate:=$RATE"
 KillSignal=SIGINT

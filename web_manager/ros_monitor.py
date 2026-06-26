@@ -784,7 +784,7 @@ class HitosMonitor(Node):
         """Read the current capture mode from the shared env file (reboot-safe:
         absent file => normal mode)."""
         calib = False
-        visible_hz = 4.0
+        visible_hz = 1.0
         try:
             with open(self._MODE_ENV) as f:
                 for line in f:
@@ -802,14 +802,14 @@ class HitosMonitor(Node):
             pass
         return {'calibration': calib, 'visible_hz': visible_hz}
 
-    def set_capture_mode(self, calibration: bool, visible_hz: float = 4.0) -> dict:
+    def set_capture_mode(self, calibration: bool, visible_hz: float = 1.0) -> dict:
         """Write the mode env file and restart sensors (Ouster azimuth/mode) +
         cameras (visible rate). hitos_sync follows cameras via PartOf=. Returns a
         combined result. The ~15-20 s sensor/camera reinit is expected."""
         try:
             visible_hz = max(0.5, min(float(visible_hz), 30.0))
         except (TypeError, ValueError):
-            visible_hz = 4.0
+            visible_hz = 1.0
         try:
             with open(self._MODE_ENV, 'w') as f:
                 f.write(f'HITOS_CALIB={1 if calibration else 0}\n')

@@ -41,14 +41,19 @@ def _launch_ouster(context, *args, **kwargs):
     params['ouster/os_driver']['ros__parameters']['use_system_default_qos'] = True
 
     # Calibration mode: widen the azimuth window to capture a near-complete cloud.
-    # Default 250° (window 52000..302000 millideg) centred so the ~110° gap sits
-    # behind the operator (encoder ~0°, opposite the camera-forward centre ~177°).
-    # Tunable via env without code edits. HITOS_CALIB is exported by the service
-    # ExecStart sourcing /tmp/hitos_mode.env.
+    # Default 180° (window 87000..267000 millideg) centred so the gap sits behind
+    # the operator (encoder ~0°, opposite the camera-forward centre ~177°). 180°
+    # keeps wide FOV for scan-matching while the on-disk rate (cloud+images 2 Hz,
+    # LWIR 2 Hz, visible 1 Hz) fits the USB2 disk ceiling (~22 MB/s) at ~16 MB/s
+    # with margin. Wider windows (200° 77000/277000, 250° 52000/302000) stay
+    # reachable via the env if a faster disk (USB3 SSD) is available. The web GUI
+    # toggle rewrites the mode env WITHOUT azimuth keys, so it always gets this
+    # default. HITOS_CALIB is exported by the service ExecStart sourcing
+    # /tmp/hitos_mode.env.
     if os.environ.get('HITOS_CALIB', '0') == '1':
         p = params['ouster/os_driver']['ros__parameters']
-        p['azimuth_window_start'] = int(os.environ.get('HITOS_CALIB_AZIMUTH_START', 52000))
-        p['azimuth_window_end']   = int(os.environ.get('HITOS_CALIB_AZIMUTH_END', 302000))
+        p['azimuth_window_start'] = int(os.environ.get('HITOS_CALIB_AZIMUTH_START', 87000))
+        p['azimuth_window_end']   = int(os.environ.get('HITOS_CALIB_AZIMUTH_END', 267000))
 
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False)
     yaml.dump(params, tmp)

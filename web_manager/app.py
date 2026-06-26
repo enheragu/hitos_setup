@@ -130,7 +130,7 @@ def api_mode_set():
         return jsonify({'error': 'Monitor not initialized'}), 503
     data = request.get_json(silent=True) or {}
     enabled = bool(data.get('enabled', False))
-    visible_hz = data.get('visible_hz', 4.0)
+    visible_hz = data.get('visible_hz', 1.0)
     result = _monitor.set_capture_mode(enabled, visible_hz)
     return jsonify(result), 200 if result.get('success') else 500
 

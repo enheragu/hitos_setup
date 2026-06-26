@@ -12,15 +12,15 @@ ouster/os_driver:
     # the launch files stay valid. Calibration mode widens this window via the
     # launch (HITOS_CALIB) without changing the mode.
     lidar_mode: '2048x10'
-    # 50° window centred on the camera FOV. Must be wider than the 30° camera FOV to
-    # compensate for the OS-0-128 pixel stagger (±32 cols at 1024x10). After destagger,
-    # the guaranteed valid column range = [raw_start - min_shift, raw_end - max_shift]
-    # = [455 - (-32), 597 - 31] = [487, 566], which exactly covers the crop cols [487, 566].
-    # Moves the valid azimuth region toward the camera forward. NOTE: encoder and
-    # the image h-convention are INVERTED — DECREASING the window moves the cropped
-    # data RIGHT (+h). Was 160000/210000 (data ~7° left of cameras). Width kept 50°
-    # (the ±32-col destagger needs it for a camera-width stripe-free crop).
-    azimuth_window_start: 152000
+    # Window centred on the camera FOV, wider than the 30° camera FOV to compensate
+    # for the OS-0-128 pixel stagger (±32 cols at 1024x10). At 152000/202000 (50°) the
+    # post-destagger stripe-free range was [487, 566], covering the crop cols [487, 566].
+    # NOTE: encoder and the image h-convention are INVERTED — DECREASING the window
+    # moves the cropped data RIGHT (+h). Was 160000/210000 (data ~7° left of cameras),
+    # then 152000/202000. start lowered a further 4° (-> 148000, window now 54°) to
+    # extend the saved cloud's FOV right; this only ADDS stripe-free cols on the right,
+    # so the crop still clears. end kept (left edge unchanged).
+    azimuth_window_start: 148000
     azimuth_window_end: 202000
     lidar_port: 7502
     imu_port: 7503
