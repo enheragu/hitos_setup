@@ -108,11 +108,13 @@ def flir_lens_segments():
 # (overhanging slab, 4 countersunk corner screw bosses, IP55/IEC/logo embossing) + 2 mounting ears.
 # Built in the ip55_box frame (origin=box bottom-centre, total height 0.095). Lid+ears authored by
 # the lid-design multi-agent workflow against the real product photo. Dims 232x182x95 are FIXED.
-def _cone_entry(c, nout, base_r=0.017, h=0.012, steps=5):   # large DOMED entry w/ concentric ring ridges
-    c = np.array(c, float); nout = np.array(nout, float)/np.linalg.norm(nout); seg = h/steps
-    return [frustum(c + nout*seg*k, c + nout*seg*(k+1),
-                    base_r*(1-(k/steps)**2)**0.5, base_r*(1-(k/steps)**2)**0.5)
-            for k in range(steps)]
+def _cone_entry(c, nout, base_r=0.017, h=0.012):   # uniform stepped truncated cone (all rings same height)
+    c = np.array(c, float); nout = np.array(nout, float)/np.linalg.norm(nout)
+    radii = [1.0, 0.78, 0.56, 0.34]                # uniform 0.22 radius drops; top ring = central, normal height
+    rh = h / len(radii); tris = []; z = 0.0
+    for r in radii:
+        tris.append(frustum(c + nout*z, c + nout*(z + rh), base_r*r, base_r*r)); z += rh
+    return tris
 def box_vents():     # 10 conos, TWO sizes. front/back: outer two LARGE + centre small. laterals: one LARGE + one small.
     z = 0.040; bx = 0.089; by = 0.114; SM = 0.018; LG = 0.024; out = []
     for nx in (1, -1):                         # front (+X) & back (-X): 3 each, pulled in (margin to edge + between)
@@ -391,7 +393,14 @@ def render(name, mesh_op, box_op, gps_op, frames=False, fov=False, fov_len=0.7, 
             else:
                 ren.AddActor(stl_actor(path, M, col, mesh_op))
     for tw, col, nm in boxprim:               # lens follows mesh_op; box+vents box_op; gps gps_op
-        op = mesh_op if nm.startswith('lens') else (gps_op if nm == 'gps_link' else box_op)
+        if nm.startswith('lens'):
+            op = mesh_op
+        elif nm == 'gps_link':
+            op = gps_op
+        elif nm == 'box_vent':
+            op = box_op if box_op >= 1.0 else box_op * 0.3   # conos recede in translucent renders (their stacked rings clutter otherwise)
+        else:
+            op = box_op
         if op > 0:
             ren.AddActor(poly_actor(tw, col, op))
     if frames:
